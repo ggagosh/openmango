@@ -20,6 +20,8 @@ const ERROR_LOG_LIMIT: usize = 100;
 pub enum ErrorAction {
     Reconnect(Uuid),
     ReloadDocuments(SessionKey),
+    /// Show the task in the Tasks tab.
+    OpenTask(Uuid),
 }
 
 #[derive(Debug, Clone)]

@@ -713,7 +713,7 @@ fn annotate_connection_error(
         }
     }
 
-    Error::Parse(message.trim_end().to_string())
+    Error::Connect { message: message.trim_end().to_string(), source: Box::new(err) }
 }
 
 fn connection_hint(message: &str, runtime_meta: &ConnectionRuntimeMeta) -> Option<&'static str> {

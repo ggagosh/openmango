@@ -28,6 +28,13 @@ pub struct Task {
     /// The schedule is kept, but no run starts by itself.
     #[serde(default)]
     pub paused: bool,
+    /// Signing in failed, so the schedule paused itself until a connection is edited or it is
+    /// resumed. Trying a wrong password again can lock the account.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused_by_sign_in: bool,
+    /// A scheduled run that succeeds says so too, not only one that fails.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notify_success: bool,
     /// The due time handled last, or when the schedule was set or resumed. The next run is the
     /// schedule's first time after it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,6 +70,8 @@ impl Task {
             safety: Default::default(),
             schedule: Schedule::Manual,
             paused: false,
+            paused_by_sign_in: false,
+            notify_success: false,
             schedule_from: None,
             approval: None,
             keep_files: None,
@@ -343,6 +352,19 @@ pub struct Run {
     pub stops: Vec<String>,
     pub log: Vec<LogLine>,
     pub log_dropped: u64,
+    /// What kind of failure ended the run, where that decides what happens next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<FailureKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureKind {
+    /// It can pass by itself: a server that couldn't be reached or didn't answer, after retrying
+    /// ran out. One such failure doesn't need attention; three in a row do.
+    Temporary,
+    /// Signing in to a connection failed.
+    SignIn,
 }
 
 impl Run {
@@ -359,6 +381,7 @@ impl Run {
             stops: Vec::new(),
             log: Vec::new(),
             log_dropped: 0,
+            failure: None,
         }
     }
 
@@ -385,6 +408,11 @@ impl Run {
         run.status = RunStatus::Skipped;
         run.finished_at = Some(run.started_at);
         run
+    }
+
+    /// A run that ended without doing all it should have.
+    pub fn failed(&self) -> bool {
+        matches!(self.status, RunStatus::Failed | RunStatus::PartlyDone | RunStatus::Interrupted)
     }
 
     /// Ends the run. The status follows from what happened unless it was cancelled.

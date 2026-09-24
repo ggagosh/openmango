@@ -32,7 +32,7 @@ pub use errors::{ErrorAction, ErrorEntry};
 pub use keybindings::KeybindingCapture;
 pub(crate) use pipeline_text::{parse_pipeline_text, pipeline_to_text, stages_from_pipeline};
 pub(crate) use sessions::SessionStore;
-pub use tasks::{ActiveRun, RunStop, TasksState, UndoLog};
+pub use tasks::{ActiveRun, Attention, Fix, RunStop, TasksState, UndoLog};
 pub use types::{
     ActiveTab, BsonOutputFormat, CardinalityBand, CollectionKey, CollectionOverview,
     CollectionProgress, CollectionStats, CollectionSubview, CollectionTransferStatus,

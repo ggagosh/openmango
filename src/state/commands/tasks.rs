@@ -34,7 +34,9 @@ use crate::state::{
     AppEvent, AppState, SessionKey, StatusMessage, TransferMode, TransferScope,
     resolved_export_destination, validate_transfer,
 };
-use crate::tasks::model::{LogLevel, Run, RunTrigger, Task as SavedTask, TaskSpec, side_index};
+use crate::tasks::model::{
+    FailureKind, LogLevel, Run, RunTrigger, Task as SavedTask, TaskSpec, side_index,
+};
 use crate::tasks::safety::{self, Planned, StopReason};
 use crate::tasks::schedule::{prune_exports, stamped_path};
 
@@ -613,6 +615,9 @@ impl AppCommands {
                 cx.update(|cx| {
                     Self::update_task_run(&state, task_id, None, cx, |run| {
                         record_transfer(run, scope, &collection, &outcome, after.as_ref());
+                        if matches!(outcome, TransferOutcome::Failed(_)) && transient && restarts {
+                            run.failure = Some(FailureKind::Temporary);
+                        }
                         if not_restartable {
                             run.log(
                                 LogLevel::Warning,
@@ -848,6 +853,17 @@ impl AppCommands {
                     ));
                 } else if let Some(error) = error {
                     run.log(LogLevel::Error, error.message.clone());
+                    // ponytail: only a whole-run failure is sorted; a collection that ran out of
+                    // retries counts as lasting, so it needs attention at once rather than never.
+                    run.failure = if error.sign_in {
+                        Some(FailureKind::SignIn)
+                    } else if error.transient
+                        && run.collections.iter().all(|entry| entry.error.is_none())
+                    {
+                        Some(FailureKind::Temporary)
+                    } else {
+                        None
+                    };
                     run.error = Some(error.message);
                 }
             })
@@ -881,10 +897,7 @@ impl AppCommands {
                 .each_ref()
                 .map(|side| side.connection_id.and_then(|id| connections.client(id)));
             let [Some(left), Some(right)] = clients else {
-                return Some(Failure {
-                    message: "The run's connections closed.".into(),
-                    transient: false,
-                });
+                return Some(Failure::lasting("The run's connections closed."));
             };
             let sides = [(&left, 0), (&right, 1)].map(|(client, i)| {
                 client.database(&config.sides[i].database).collection(&config.sides[i].collection)
@@ -920,15 +933,12 @@ impl AppCommands {
                     return None;
                 }
                 Ok(Ok(_)) if watch.over() => return None,
-                Ok(Ok(_)) => Failure {
-                    message: format!("No progress for {} minutes", task_run::STALL.as_secs() / 60),
-                    transient: true,
-                },
+                Ok(Ok(_)) => Failure::temporary(format!(
+                    "No progress for {} minutes",
+                    task_run::STALL.as_secs() / 60
+                )),
                 Ok(Err(error)) => Failure::from(error),
-                Err(error) => Failure {
-                    message: format!("The comparison stopped: {error}"),
-                    transient: false,
-                },
+                Err(error) => Failure::lasting(format!("The comparison stopped: {error}")),
             };
             if !failure.transient
                 || tries == task_run::ATTEMPTS
@@ -981,10 +991,7 @@ impl AppCommands {
                 let databases = databases.clone();
                 let work = runtime.spawn(async move {
                     let [Some(left), Some(right)] = clients else {
-                        return Err(Failure {
-                            message: "The run's connections closed.".into(),
-                            transient: false,
-                        });
+                        return Err(Failure::lasting("The run's connections closed."));
                     };
                     let (l, r) = tokio::join!(
                         list_side(&left, &databases[0], timeout),
@@ -994,10 +1001,7 @@ impl AppCommands {
                 });
                 async move {
                     work.await.unwrap_or_else(|error| {
-                        Err(Failure {
-                            message: format!("Listing stopped: {error}"),
-                            transient: false,
-                        })
+                        Err(Failure::lasting(format!("Listing stopped: {error}")))
                     })
                 }
             },
@@ -1046,20 +1050,14 @@ impl AppCommands {
                 let (databases, ignore) = (databases.clone(), ignore.clone());
                 let work = runtime.spawn(async move {
                     let [Some(left), Some(right)] = clients else {
-                        return Err(Failure {
-                            message: "The run's connections closed.".into(),
-                            transient: false,
-                        });
+                        return Err(Failure::lasting("The run's connections closed."));
                     };
                     compare_pairs_async([left, right], databases, scans, ignore, sender).await;
                     Ok(())
                 });
                 (receiver, async move {
                     work.await.unwrap_or_else(|error| {
-                        Err(Failure {
-                            message: format!("The comparison stopped: {error}"),
-                            transient: false,
-                        })
+                        Err(Failure::lasting(format!("The comparison stopped: {error}")))
                     })
                 })
             },
@@ -1502,10 +1500,7 @@ impl AppCommands {
                             (databases.clone(), sync.config.ignore_set(), restore_dir.clone());
                         let work = runtime.spawn(async move {
                             let [Some(left), Some(right)] = clients else {
-                                return Err(Failure {
-                                    message: "The run's connections closed.".into(),
-                                    transient: false,
-                                });
+                                return Err(Failure::lasting("The run's connections closed."));
                             };
                             let (databases, ignore, restore_dir) = request;
                             sync_pairs_async(
@@ -1528,10 +1523,7 @@ impl AppCommands {
                         });
                         (receiver, async move {
                             work.await.unwrap_or_else(|error| {
-                                Err(Failure {
-                                    message: format!("The sync stopped: {error}"),
-                                    transient: false,
-                                })
+                                Err(Failure::lasting(format!("The sync stopped: {error}")))
                             })
                         })
                     },
@@ -1697,20 +1689,14 @@ impl AppCommands {
                     let (sender, receiver) = futures::channel::mpsc::unbounded();
                     let work = runtime.spawn(async move {
                         let Some(client) = client else {
-                            return Err(Failure {
-                                message: "The run's connection closed.".into(),
-                                transient: false,
-                            });
+                            return Err(Failure::lasting("The run's connection closed."));
                         };
                         undo_pairs_async(client, database, logs, token, sender).await;
                         Ok(())
                     });
                     (receiver, async move {
                         work.await.unwrap_or_else(|error| {
-                            Err(Failure {
-                                message: format!("The undo stopped: {error}"),
-                                transient: false,
-                            })
+                            Err(Failure::lasting(format!("The undo stopped: {error}")))
                         })
                     })
                 },
@@ -2502,7 +2488,7 @@ mod tests {
                 app.connections[0].environment =
                     Some(crate::models::ConnectionEnvironment::Production);
                 app.connections[0].confirm_production_writes = true;
-                app.set_task_schedule(task.id, daily.clone(), safety, keep, true).unwrap();
+                app.set_task_schedule(task.id, daily.clone(), safety, keep, true, false).unwrap();
                 app.mark_task_due(task.id, from);
             });
         };
@@ -2554,6 +2540,23 @@ mod tests {
             ["orders-2027-03-05T0200.jsonl", "orders-2027-03-06T0200.jsonl", "orders.jsonl"]
         );
         assert!(state.read_with(cx, |app, _| app.tasks.active.is_empty()));
+
+        // A wrong password: the server refuses the sign-in, and the schedule pauses instead of
+        // trying it again each day.
+        state.update(cx, |app, _| {
+            app.connections[0].uri = uri.replacen("mongodb://", "mongodb://nobody:wrong@", 1);
+        });
+        due(cx, at(7));
+        let refused = finished(cx, &export);
+        assert_eq!(refused.failure, Some(crate::tasks::model::FailureKind::SignIn), "{refused:?}");
+        state.read_with(cx, |app, _| {
+            let task = app.task(export.id).unwrap();
+            assert!(task.paused && task.paused_by_sign_in);
+            let fix = app.task_attention(task).map(|attention| attention.fix);
+            assert_eq!(fix, Some(crate::state::app_state::Fix::Resume));
+        });
+        due(cx, at(8));
+        assert_eq!(finished(cx, &export).id, refused.id, "paused, so nothing else ran");
         // The container stops through Tokio, so it is dropped inside a runtime.
         docker.block_on(async move { drop(container) });
     }

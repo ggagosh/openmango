@@ -43,6 +43,11 @@ pub enum Error {
     #[error("{0}")]
     ToolNotFound(String),
 
+    /// Connecting failed. `message` says what happened and how to fix it; `source` keeps the error
+    /// itself, so whether trying again can help isn't lost.
+    #[error("{message}")]
+    Connect { message: String, source: Box<Error> },
+
     #[error("Transfer failed after {processed} document(s): {source}")]
     PartialTransfer { processed: u64, source: Box<Error> },
 
@@ -110,7 +115,9 @@ impl Error {
             ),
             // A dropped SSH tunnel is a dropped connection.
             Self::Ssh(_) | Self::Timeout(_) => true,
-            Self::PartialTransfer { source, .. } => source.is_transient(),
+            Self::PartialTransfer { source, .. } | Self::Connect { source, .. } => {
+                source.is_transient()
+            }
             _ => false,
         }
     }
@@ -152,17 +159,59 @@ fn mongo_is_transient(error: &mongodb::error::Error) -> bool {
     }
 }
 
+/// Signing in failed: a wrong user, password or authentication database. Trying again with the
+/// same settings fails again, and can lock the account on servers that lock after failed sign-ins.
+fn mongo_is_sign_in(error: &mongodb::error::Error) -> bool {
+    use mongodb::error::ErrorKind;
+    match error.kind.as_ref() {
+        ErrorKind::Authentication { .. } => true,
+        // AuthenticationFailed
+        ErrorKind::Command(command) => command.code == 18,
+        _ => false,
+    }
+}
+
+impl Error {
+    pub fn is_sign_in(&self) -> bool {
+        match self {
+            Self::Mongo(error) => mongo_is_sign_in(error),
+            Self::PartialTransfer { source, .. } | Self::Connect { source, .. } => {
+                source.is_sign_in()
+            }
+            _ => false,
+        }
+    }
+}
+
 /// A failure reported through a progress channel, which carries text: the text, and whether
 /// trying again can help, decided while the error itself was still at hand.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Failure {
     pub message: String,
     pub transient: bool,
+    /// Signing in to a connection failed.
+    pub sign_in: bool,
+}
+
+impl Failure {
+    /// A failure that trying again won't fix.
+    pub fn lasting(message: impl Into<String>) -> Self {
+        Self { message: message.into(), ..Default::default() }
+    }
+
+    /// A failure that can pass by itself, such as a stalled step.
+    pub fn temporary(message: impl Into<String>) -> Self {
+        Self { message: message.into(), transient: true, ..Default::default() }
+    }
 }
 
 impl From<&Error> for Failure {
     fn from(error: &Error) -> Self {
-        Self { message: error.to_string(), transient: error.is_transient() }
+        Self {
+            message: error.to_string(),
+            transient: error.is_transient(),
+            sign_in: error.is_sign_in(),
+        }
     }
 }
 
@@ -199,6 +248,14 @@ mod tests {
         let failure = Failure::from(&reset);
         assert!(failure.transient);
         assert_eq!(failure.to_string(), reset.to_string());
+        // A failed connection reads as its advice, but keeps whether it can pass.
+        let unreachable = Error::Connect {
+            message: "No server is available.\n\nHint: …".into(),
+            source: Box::new(Error::Timeout("ping".into())),
+        };
+        assert!(unreachable.is_transient());
+        assert!(!unreachable.is_sign_in());
+        assert_eq!(Failure::from(&unreachable).message, "No server is available.\n\nHint: …");
     }
 
     #[test]

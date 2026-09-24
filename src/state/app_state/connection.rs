@@ -491,8 +491,10 @@ impl AppState {
             apply_agent_sharing_safety(existing, &mut connection);
         }
         connection.secret_id = Some(Uuid::new_v4());
+        let id = connection.id;
         self.finish_update_connection(connection, cx);
         self.sync_connection_secrets(rollback, cx);
+        self.resume_tasks_after_sign_in_fix(id);
     }
 
     pub fn set_connection_agent_shared(

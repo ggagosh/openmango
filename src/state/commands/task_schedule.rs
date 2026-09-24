@@ -258,6 +258,93 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn an_outage_notifies_once_and_needs_attention_after_three_failed_runs(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::state::ErrorAction;
+        use crate::state::app_state::Fix;
+        use crate::tasks::model::FailureKind;
+
+        cx.update(gpui_kit::init);
+        let directory = tempfile::tempdir().unwrap();
+        let source = SavedConnection::new("Source".into(), "mongodb://localhost:1".into());
+        let state = cx.new(|_| {
+            let mut app = AppState::with_config(
+                Arc::new(crate::connection::ConnectionManager::new()),
+                ConfigManager::with_config_dir(directory.path().into()),
+            );
+            app.connections = vec![source.clone()];
+            app.attach_task_runs(RunStore::in_memory().unwrap(), None);
+            app
+        });
+        let mut config = CompareConfig::default();
+        config.sides[0].connection_id = Some(source.id);
+        config.sides[1].connection_id = Some(source.id);
+        let task = daily("Nightly", TaskSpec::Compare { config });
+        let run = |status: RunStatus, failure: Option<FailureKind>| {
+            let mut run = Run::start(task.id, RunTrigger::Schedule);
+            run.status = status;
+            run.failure = failure;
+            run.error = (status == RunStatus::Failed).then(|| "Server unreachable".to_string());
+            run.finished_at = Some(Utc::now());
+            run
+        };
+        let notified = |app: &AppState| {
+            app.error_entries()
+                .filter(|entry| matches!(entry.action, Some(ErrorAction::OpenTask(id)) if id == task.id))
+                .count()
+        };
+        state.update(cx, |app, _| {
+            app.upsert_task(task.clone()).unwrap();
+            let attention = |app: &AppState| app.task_attention(app.task(task.id).unwrap());
+
+            // A server that can't be reached: one notification for the outage, and the task
+            // needs attention only at the third failure in a row.
+            let temporary = Some(FailureKind::Temporary);
+            app.record_task_run(run(RunStatus::Failed, temporary), true);
+            assert_eq!(notified(app), 1);
+            assert_eq!(attention(app), None);
+            app.record_task_run(run(RunStatus::Failed, temporary), true);
+            assert_eq!(notified(app), 1, "the same outage");
+            app.record_task_run(run(RunStatus::Failed, temporary), true);
+            let reason = attention(app).unwrap().reason;
+            assert_eq!(reason, "The last 3 runs failed.");
+            assert_eq!(app.tasks_needing_attention(), 1);
+
+            // It works again, and says so.
+            app.record_task_run(run(RunStatus::Succeeded, None), true);
+            assert_eq!(attention(app), None);
+            let message = app.status_message().unwrap().text;
+            assert_eq!(message, "“Nightly” works again.");
+
+            // A failure that won't pass needs attention at once, with the run to look at.
+            let lasting = run(RunStatus::Failed, None);
+            app.record_task_run(lasting.clone(), true);
+            assert_eq!(notified(app), 2);
+            assert_eq!(attention(app).unwrap().fix, Fix::ShowRun(lasting.id));
+
+            // Signing in failed: the schedule pauses, which needs attention and notifies even
+            // though the run before failed too.
+            app.record_task_run(run(RunStatus::Failed, Some(FailureKind::SignIn)), true);
+            let paused = app.task(task.id).unwrap();
+            assert!(paused.paused && paused.paused_by_sign_in);
+            assert_eq!(attention(app).unwrap().fix, Fix::Resume);
+            assert_eq!(notified(app), 3);
+
+            // Editing the connection resumes it.
+            app.resume_tasks_after_sign_in_fix(source.id);
+            let resumed = app.task(task.id).unwrap();
+            assert!(!resumed.paused && !resumed.paused_by_sign_in);
+
+            // A task without a schedule never needs attention: whoever ran it saw the result.
+            let mut manual = app.task(task.id).unwrap().clone();
+            manual.schedule = Schedule::Manual;
+            app.upsert_task(manual).unwrap();
+            assert_eq!(attention(app), None);
+        });
+    }
+
+    #[gpui_kit::test]
     fn a_scheduled_write_stops_when_its_connection_changed_since_approval(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let directory = tempfile::tempdir().unwrap();
@@ -289,7 +376,8 @@ mod tests {
         state.update(cx, |app, _| {
             app.upsert_task(sync.clone()).unwrap();
             let schedule = sync.schedule.clone();
-            app.set_task_schedule(sync.id, schedule, Default::default(), None, false).unwrap();
+            app.set_task_schedule(sync.id, schedule, Default::default(), None, false, false)
+                .unwrap();
             assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
 
             // The target becomes Production after approval.

@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::connection::CancellationToken;
 use crate::models::{ConnectionEnvironment, SavedConnection};
 use crate::state::compare::{CompareScope, CompareTaskLink};
-use crate::tasks::model::{Approval, Run, Task, TaskSpec};
+use crate::tasks::model::{Approval, FailureKind, Run, RunStatus, RunTrigger, Task, TaskSpec};
 use crate::tasks::safety::SafetyLimit;
 use crate::tasks::schedule::Schedule;
 use crate::tasks::store::RunStore;
@@ -32,6 +32,46 @@ pub struct TasksState {
     /// Scheduled runs that are due, waiting for the run before them to end: task, due time, and
     /// whether it is a catch-up. Runs go one at a time.
     pub queue: Vec<(Uuid, DateTime<Utc>, bool)>,
+    /// The task the Tasks tab should select next, e.g. from a notification's Open.
+    pub focus: Option<Uuid>,
+}
+
+/// Why a task needs attention, and the button that fixes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attention {
+    pub reason: String,
+    pub detail: String,
+    pub fix: Fix,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fix {
+    /// Record the connections as they are now.
+    Approve,
+    /// Open the task in its tool to choose another connection.
+    Edit,
+    /// Start the schedule again.
+    Resume,
+    /// Run it once now, after asking, despite the safety limit.
+    RunAnyway,
+    /// Show the failed run's details.
+    ShowRun(Uuid),
+}
+
+/// Runs in a row that fail for a reason that can pass before a task needs attention anyway.
+const TEMPORARY_FAILURES: usize = 3;
+
+/// A failed run's error in one line: the run's own, or its first failed collection's.
+fn failure_text(run: &Run) -> String {
+    let first = |text: &str| text.lines().next().unwrap_or_default().to_string();
+    match &run.error {
+        Some(error) => first(error),
+        None => run
+            .collections
+            .iter()
+            .find_map(|entry| Some(format!("{}: {}", entry.name, first(entry.error.as_ref()?))))
+            .unwrap_or_default(),
+    }
 }
 
 /// A run in progress. Its record lives in `TasksState::runs` like a finished one.
@@ -114,7 +154,8 @@ impl AppState {
 
     /// Sets when the task runs by itself, with its safety limit. A schedule for a task that
     /// writes approves the connections it uses as they are now; `protected_writes` lets its runs
-    /// write to a Production or protected connection.
+    /// write to a Production or protected connection. `notify_success`: a scheduled run that
+    /// succeeds says so too.
     pub fn set_task_schedule(
         &mut self,
         id: Uuid,
@@ -122,6 +163,7 @@ impl AppState {
         safety: SafetyLimit,
         keep_files: Option<u32>,
         protected_writes: bool,
+        notify_success: bool,
     ) -> Result<(), String> {
         let mut task = self.task(id).cloned().ok_or("The task no longer exists.")?;
         task.approval = (!schedule.is_manual() && task.spec.write_connection().is_some())
@@ -129,7 +171,9 @@ impl AppState {
         task.schedule = schedule;
         task.safety = safety;
         task.keep_files = keep_files;
+        task.notify_success = notify_success;
         task.paused = false;
+        task.paused_by_sign_in = false;
         task.schedule_from = Some(Utc::now());
         self.upsert_task(task)
     }
@@ -147,9 +191,155 @@ impl AppState {
         let mut task = self.task(id).cloned().ok_or("The task no longer exists.")?;
         task.paused = paused;
         if !paused {
+            task.paused_by_sign_in = false;
             task.schedule_from = Some(Utc::now());
         }
         self.upsert_task(task)
+    }
+
+    /// A connection was edited: tasks whose schedule paused after signing in to it failed run
+    /// again.
+    pub(crate) fn resume_tasks_after_sign_in_fix(&mut self, connection_id: Uuid) {
+        let paused: Vec<Uuid> = self
+            .tasks
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.paused_by_sign_in && task.spec.connections().contains(&connection_id)
+            })
+            .map(|task| task.id)
+            .collect();
+        for id in paused {
+            if let Err(error) = self.set_task_paused(id, false) {
+                log::warn!("Could not resume a task after its connection was edited: {error}");
+            }
+        }
+    }
+
+    /// Selects the task in the Tasks tab, opening the tab.
+    pub fn open_task(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        self.tasks.focus = Some(id);
+        self.open_tasks_tab(cx);
+        cx.notify();
+    }
+
+    /// Why the task needs attention, if it does. Only a scheduled task can: a run someone
+    /// started shows its result to them.
+    pub fn task_attention(&self, task: &Task) -> Option<Attention> {
+        if task.schedule.is_manual() {
+            return None;
+        }
+        if task.spec.connections().iter().any(|id| self.connection_by_id(*id).is_none()) {
+            return Some(Attention {
+                reason: "A connection this task uses was deleted.".into(),
+                detail: "Scheduled runs fail until you edit the task to choose another connection."
+                    .into(),
+                fix: Fix::Edit,
+            });
+        }
+        if task.paused_by_sign_in {
+            return Some(Attention {
+                reason: "Signing in failed, so the schedule is paused.".into(),
+                detail: "Edit the connection, or choose Resume, to run it on its schedule again."
+                    .into(),
+                fix: Fix::Resume,
+            });
+        }
+        if let Some(problem) = self.task_approval_problem(task) {
+            return Some(Attention {
+                reason: problem,
+                detail: "Scheduled runs fail until you approve the connections as they are now."
+                    .into(),
+                fix: Fix::Approve,
+            });
+        }
+        if task.paused {
+            return None;
+        }
+        let runs: Vec<&Run> = self
+            .task_runs(task.id)
+            .iter()
+            .filter(|run| {
+                run.trigger.is_run()
+                    && !matches!(run.status, RunStatus::Running | RunStatus::Skipped)
+            })
+            .collect();
+        let last = runs.first().filter(|run| run.failed())?;
+        if !last.stops.is_empty() {
+            return Some(Attention {
+                reason: "The safety limit stopped the last run.".into(),
+                detail: "Nothing was written. Preview shows what it would change.".into(),
+                fix: Fix::RunAnyway,
+            });
+        }
+        let in_a_row = runs.iter().take_while(|run| run.failed()).count();
+        if last.failure == Some(FailureKind::Temporary) && in_a_row < TEMPORARY_FAILURES {
+            return None;
+        }
+        let reason = match last.status {
+            _ if in_a_row >= TEMPORARY_FAILURES => format!("The last {in_a_row} runs failed."),
+            RunStatus::PartlyDone => "Some collections failed in the last run.".into(),
+            RunStatus::Interrupted => "The last run was cut short when OpenMango closed.".into(),
+            _ => "The last run failed.".into(),
+        };
+        Some(Attention { reason, detail: failure_text(last), fix: Fix::ShowRun(last.id) })
+    }
+
+    /// How many tasks need attention, for the sidebar's badge.
+    pub fn tasks_needing_attention(&self) -> usize {
+        self.tasks.tasks.iter().filter(|task| self.task_attention(task).is_some()).count()
+    }
+
+    /// After a run ends: a failed sign-in pauses the task's schedule, and a scheduled run says
+    /// how it went once per outage, when it works again, and each time when asked to.
+    fn task_run_ended(&mut self, run: &Run) {
+        let Some(mut task) = self.task(run.task_id).cloned() else {
+            return;
+        };
+        let paused_now =
+            run.failure == Some(FailureKind::SignIn) && !task.schedule.is_manual() && !task.paused;
+        if paused_now {
+            task.paused = true;
+            task.paused_by_sign_in = true;
+            if let Err(error) = self.upsert_task(task.clone()) {
+                log::warn!("Could not pause a task after signing in failed: {error}");
+            }
+        }
+        if !matches!(run.trigger, RunTrigger::Schedule | RunTrigger::CatchUp) {
+            return;
+        }
+        let previous = self.task_runs(task.id).iter().find(|earlier| {
+            earlier.id != run.id
+                && earlier.trigger.is_run()
+                && !matches!(earlier.status, RunStatus::Running | RunStatus::Skipped)
+        });
+        // The same outage: the run before failed the same way.
+        let same_outage =
+            previous.is_some_and(|previous| previous.failed() && previous.failure == run.failure);
+        if run.failed() && (!same_outage || paused_now) {
+            let (title, message) = if paused_now {
+                (
+                    format!("“{}” couldn't sign in", task.name),
+                    "Its schedule is paused until you edit the connection or resume it."
+                        .to_string(),
+                )
+            } else {
+                (format!("“{}” failed", task.name), failure_text(run))
+            };
+            self.report_error_with_action(
+                crate::error::ErrorReport::new(title, message),
+                super::ErrorAction::OpenTask(task.id),
+            );
+        } else if run.status == RunStatus::Succeeded {
+            let text = if previous.is_some_and(Run::failed) {
+                format!("“{}” works again.", task.name)
+            } else if task.notify_success {
+                format!("“{}” ran on its schedule.", task.name)
+            } else {
+                return;
+            };
+            self.set_status_message(Some(crate::state::StatusMessage::info(text)));
+        }
     }
 
     /// Notes that the scheduler dealt with the task's run due at `due`, so it isn't run again.
@@ -219,12 +409,17 @@ impl AppState {
         {
             log::warn!("Could not save a task run: {error:#}");
         }
+        let ended = persist && !matches!(run.status, RunStatus::Running | RunStatus::Skipped);
+        let ended_run = ended.then(|| run.clone());
         let runs = self.tasks.runs.entry(run.task_id).or_default();
         match runs.iter_mut().find(|existing| existing.id == run.id) {
             Some(existing) => *existing = run,
             None => runs.insert(0, run),
         }
         runs.truncate(crate::tasks::store::RUNS_PER_TASK);
+        if let Some(run) = ended_run {
+            self.task_run_ended(&run);
+        }
     }
 
     /// Opens a Transfer tab state that no tab shows, for a task to run through.

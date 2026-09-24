@@ -76,6 +76,7 @@ pub struct ScheduleEditor {
     days: Vec<Weekday>,
     weekdays_only: bool,
     keep_files: bool,
+    notify_success: bool,
     protected_writes: bool,
     /// The Production or protected connection the task writes to, by name.
     protected_target: Option<String>,
@@ -146,6 +147,7 @@ impl ScheduleEditor {
             days,
             weekdays_only,
             keep_files: task.keep_files.is_some(),
+            notify_success: task.notify_success,
             protected_writes: task
                 .approval
                 .as_ref()
@@ -252,14 +254,21 @@ impl ScheduleEditor {
         }
         let keep_files = (self.keep_files && self.stamped_export().is_some()).then_some(KEEP_FILES);
         let protected_writes = self.protected_writes;
+        let notify_success = self.notify_success;
         let apply = {
             let (state, id, name) = (self.state.clone(), self.task.id, self.task.name.clone());
             move |window: &mut Window, cx: &mut App| -> Result<(), String> {
                 let next = schedule.next_after(&Local::now());
                 let label = schedule.label();
                 let result = state.update(cx, |app, cx| {
-                    let result =
-                        app.set_task_schedule(id, schedule, safety, keep_files, protected_writes);
+                    let result = app.set_task_schedule(
+                        id,
+                        schedule,
+                        safety,
+                        keep_files,
+                        protected_writes,
+                        notify_success,
+                    );
                     if result.is_ok() {
                         let message = match next {
                             Some(next) => format!(
@@ -643,7 +652,15 @@ impl Render for ScheduleEditor {
             )
             .child(rule)
             .when_some(schedule.filter(|schedule| !schedule.is_manual()), |editor, schedule| {
-                let editor = editor.child(self.render_next(&schedule, cx));
+                let editor = editor.child(self.render_next(&schedule, cx)).child(
+                    Checkbox::new("schedule-notify-success")
+                        .label("Also notify when a scheduled run succeeds")
+                        .checked(self.notify_success)
+                        .on_click(cx.listener(|editor, checked: &bool, _, cx| {
+                            editor.notify_success = *checked;
+                            cx.notify();
+                        })),
+                );
                 match &export {
                     Some(path) => editor.child(self.render_export(path, &schedule, cx)),
                     None => editor,

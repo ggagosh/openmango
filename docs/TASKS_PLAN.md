@@ -147,9 +147,28 @@ schedules safely, 3b adds needs attention, notifications and the outage rules (s
   the question before scheduled Production writes; and in Docker, a scheduled Mirror stopped by the
   limit, then writing into Production without a question, and scheduled exports keeping two files.
 
-**PR 3b, problems and notifications — next.** Needs attention with the sidebar badge, one
-notification per outage, attention after three failures in a row, and pausing after a sign-in
-failure.
+**PR 3b, problems and notifications — built.** Section 4.3's list, less the parts that belong to
+the background runner (PR 4), and section 7.4.
+
+- **Needs attention** (`AppState::task_attention`) applies to scheduled tasks only: whoever
+  pressed Run now saw the result. A task needs attention when a connection it uses was deleted,
+  signing in failed, its approval no longer matches, the safety limit stopped its last run, or its
+  last run failed, was partly done or was cut short. A run records whether its failure can pass
+  (`Run::failure`); such a failure needs attention only at the third in a row. Only a failure of
+  the whole run is sorted that way: a collection that ran out of retries counts as lasting, so the
+  shortcut can only add attention, never hide it.
+- **The details** show the reason with its fix: Approve again, Edit, Resume, Run anyway… or Show
+  run. A Needs attention filter sits above the list while any task needs it, the row shows ⚠, and
+  the sidebar's Tasks button carries a count like Agent Activity's.
+- **Notifications** use the app's error notification, with Open task, which selects the task. A
+  scheduled run that fails notifies unless the run before it failed the same way; the first one
+  that succeeds after a failure says "works again" in the status bar. Schedule… has "Also notify when
+  a scheduled run succeeds". Runs someone started don't notify.
+- **A failed sign-in** pauses a scheduled task, from any run. Saving the connection resumes it,
+  since every edit gives the connection a new secret id; so does Resume.
+- **Fix to PR 2:** connecting wrapped every error in plain text, so a run whose server couldn't be
+  reached at the start failed at once instead of waiting and retrying. `Error::Connect` keeps the
+  helpful text and the error it came from.
 
 ## 1. What the evidence says
 
