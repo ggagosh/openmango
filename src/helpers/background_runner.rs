@@ -479,7 +479,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn systemd_accepts_the_units() {
-        let Ok(analyze) = which_systemd_analyze() else { return };
+        let Ok(analyze) = which_systemd_analyze() else {
+            // CI must check, not skip.
+            assert!(std::env::var_os("CI").is_none(), "systemd-analyze is missing");
+            return;
+        };
         let dir = tempfile::tempdir().unwrap();
         let exe = std::env::current_exe().unwrap();
         let service = dir.path().join("openmango-tasks.service");
