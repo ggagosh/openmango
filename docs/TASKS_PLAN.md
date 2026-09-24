@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety), PR 2b (recovery for Compare and Sync), PR 2c (recovery for transfers) and PR 3a (schedules while the app is open) are built; see Implementation status.
+Status: decisions confirmed 2026-09-23. Everything planned is built, PRs 1 through 7; see Implementation status. Still to try on real machines: the background runner's system entries and the system notifications on each system.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
