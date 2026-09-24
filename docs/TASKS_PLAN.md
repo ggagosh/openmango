@@ -194,8 +194,11 @@ the background runner (PR 4), and section 7.4.
   off or is deleted. `SMAppService` needs macOS 13 and an app bundle, so on macOS 11 and 12, and
   in `cargo run` builds, the option is shown switched off with why. A task set to run while closed
   needs attention when the agent is off in Login Items, with Open Login Items.
-- **Not verified yet:** reading passwords from a run without a window, and the Login Items flow,
-  on a real bundle. Both need the app built as a bundle and run on a logged-in Mac.
+- **Verified:** a `--run-due-tasks` run with no window, from a dev build signed with the
+  development identity, read a Sync task's connection passwords from the keychain without a
+  prompt, ran the task and recorded it (2026-09-24).
+- **Not verified yet:** registering the launch agent, the Login Items flow and a launchd-started
+  run, which need the app built as a bundle.
 
 ## 1. What the evidence says
 
