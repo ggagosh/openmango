@@ -409,6 +409,8 @@ impl AppRoot {
                     state.attach_task_runs(store, note);
                     cx.notify();
                 });
+                // After the history, so runs cut short last time are marked before any starts.
+                AppCommands::start_scheduler(state.downgrade(), cx);
             });
         })
         .detach();

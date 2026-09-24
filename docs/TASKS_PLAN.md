@@ -1,6 +1,6 @@
 # Tasks and scheduling — plan
 
-Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety), PR 2b (recovery for Compare and Sync) and PR 2c (recovery for transfers) are built; see Implementation status.
+Status: decisions confirmed 2026-09-23. PR 1 (tasks you run yourself), PR 2a (safety), PR 2b (recovery for Compare and Sync), PR 2c (recovery for transfers) and PR 3a (schedules while the app is open) are built; see Implementation status.
 
 A task is a saved Transfer or Compare setup. People run it with one click, give it a schedule,
 and see the result of every run, including runs that happen while OpenMango is closed.
@@ -113,6 +113,43 @@ the engines tasks call directly, 2c covers transfers.
 - **Tests:** `failCommand` makes an export's read time out three times; the run starts over and
   writes the whole file, and the sidebar's connection stays closed. A copy that appends, failing
   the same way, isn't run again.
+
+**PR 3a, schedules while OpenMango is open — built.** PR 3 was split: 3a runs tasks on their
+schedules safely, 3b adds needs attention, notifications and the outage rules (section 7.4).
+
+- **The schedule editor** opens from Schedule… among the task's actions, not from the Save as
+  task dialog. It holds the rule, a calendar that dims the days it doesn't run beside the next
+  three run times, the safety limit's three numbers for a task that writes, the Production opt-in,
+  and "Keep only the newest 30 files" for an export. Pause and Resume sit beside Schedule…; a
+  resumed schedule doesn't catch up. The details list Schedule and Safety in the same label and
+  value list as the reference peek.
+- **Rules:** Every… counts from midnight, so every 2 hours runs at 00:00, 02:00 and so on, however
+  the schedule was set. A monthly day a month doesn't have runs on its last day. Both clock changes
+  follow section 5.1, with `chrono-tz` in the tests.
+- **The scheduler** (`src/state/commands/task_schedule.rs`) waits for the earliest due run, but
+  looks at the clock at least once a minute: timers don't count time the computer sleeps, so a run
+  due during sleep starts within a minute of waking. A due time found more than 2 minutes late is
+  a Catch-up; waiting in the queue behind another run doesn't make one.
+- **The queue** starts a scheduled run only when no task is running. A task still running when it
+  comes due is recorded as ⏭ Skipped, and so is a catch-up skipped because the next run is close.
+- **Approval** records each connection's identity hash, the one Agent Activity uses. It includes
+  the connection's name, so renaming a connection asks for approval again. A problem shows in the
+  task's details with Approve again, which asks first when the target is Production or protected.
+- **Scheduled runs never ask.** The safety limit stops them before writing, recorded as ⚠ Failed
+  with its reasons and a Run anyway… button that goes through Run now. The approval stands in for
+  the Production write confirmation: a run grants itself exactly the writes it makes. Retrying
+  stops when the task's next run is due.
+- **Scheduled exports** get their run's time in the file name unless the path already has a
+  `${date}`, `${datetime}` or `${time}` placeholder. Keeping the newest 30 deletes only files named
+  that way.
+- **Tests:** next-run rules for every preset, month ends and both clock changes; the queue, the
+  catch-up, skipping and pausing; approval and its revocation; the editor in a window, including
+  the question before scheduled Production writes; and in Docker, a scheduled Mirror stopped by the
+  limit, then writing into Production without a question, and scheduled exports keeping two files.
+
+**PR 3b, problems and notifications — next.** Needs attention with the sidebar badge, one
+notification per outage, attention after three failures in a row, and pausing after a sign-in
+failure.
 
 ## 1. What the evidence says
 

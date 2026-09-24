@@ -38,6 +38,7 @@ reqwest-middleware = { version = "0.5", default-features = false }
 reqwest-retry = "0.9"
 uuid = { version = "1.21", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+iana-time-zone = "0.1"
 # Layered graph layout for the relation canvas: a port of dagre, the engine behind Mermaid.
 # Pinned exactly, since it is an alpha whose API is not promised; all use is in
 # `state/relations/layout.rs`, so replacing it touches one file.
@@ -95,6 +96,7 @@ minisign-verify = "=0.2.5"
 winresource = "0.1"
 
 [dev-dependencies]
+chrono-tz = "0.10"
 gpui-kit = { version = "0.6.2", features = ["test-support"] }
 cargo-husky = { version = "1", default-features = false, features = [
     "user-hooks",

@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use gpui_kit::{Context, Subscription};
 use uuid::Uuid;
 
 use crate::connection::CancellationToken;
+use crate::models::{ConnectionEnvironment, SavedConnection};
 use crate::state::compare::{CompareScope, CompareTaskLink};
-use crate::tasks::model::{Run, Task, TaskSpec};
+use crate::tasks::model::{Approval, Run, Task, TaskSpec};
+use crate::tasks::safety::SafetyLimit;
+use crate::tasks::schedule::Schedule;
 use crate::tasks::store::RunStore;
 
 use super::{AppState, TabKey, TransferTabState};
@@ -25,6 +29,9 @@ pub struct TasksState {
     pub undo: HashMap<Uuid, UndoLog>,
     /// Said once in the Tasks tab when runs can't be kept after the app closes.
     pub store_note: Option<String>,
+    /// Scheduled runs that are due, waiting for the run before them to end: task, due time, and
+    /// whether it is a catch-up. Runs go one at a time.
+    pub queue: Vec<(Uuid, DateTime<Utc>, bool)>,
 }
 
 /// A run in progress. Its record lives in `TasksState::runs` like a finished one.
@@ -33,6 +40,8 @@ pub struct ActiveRun {
     pub stop: RunStop,
     /// Transfers run through a Transfer tab state that isn't shown; its runtime holds progress.
     pub transfer_id: Option<Uuid>,
+    /// A scheduled run stops retrying when its task's next run is due.
+    pub retry_until: Option<std::time::Instant>,
     pub(crate) _events: Option<Subscription>,
 }
 
@@ -52,6 +61,11 @@ pub struct UndoLog {
 pub enum RunStop {
     Transfer(Uuid),
     Token(CancellationToken),
+}
+
+/// The connection's identity, as task approval records it.
+fn identity(connection: &SavedConnection) -> String {
+    crate::actions::connection_identity_hash(connection).unwrap_or_default()
 }
 
 impl AppState {
@@ -96,6 +110,100 @@ impl AppState {
             log::warn!("Could not delete the task's runs: {error:#}");
         }
         self.save_tasks()
+    }
+
+    /// Sets when the task runs by itself, with its safety limit. A schedule for a task that
+    /// writes approves the connections it uses as they are now; `protected_writes` lets its runs
+    /// write to a Production or protected connection.
+    pub fn set_task_schedule(
+        &mut self,
+        id: Uuid,
+        schedule: Schedule,
+        safety: SafetyLimit,
+        keep_files: Option<u32>,
+        protected_writes: bool,
+    ) -> Result<(), String> {
+        let mut task = self.task(id).cloned().ok_or("The task no longer exists.")?;
+        task.approval = (!schedule.is_manual() && task.spec.write_connection().is_some())
+            .then(|| self.task_approval(&task, protected_writes));
+        task.schedule = schedule;
+        task.safety = safety;
+        task.keep_files = keep_files;
+        task.paused = false;
+        task.schedule_from = Some(Utc::now());
+        self.upsert_task(task)
+    }
+
+    /// Records the connections a task uses as they are now, for its scheduled runs to write.
+    pub fn approve_task(&mut self, id: Uuid, protected_writes: bool) -> Result<(), String> {
+        let mut task = self.task(id).cloned().ok_or("The task no longer exists.")?;
+        task.approval = Some(self.task_approval(&task, protected_writes));
+        self.upsert_task(task)
+    }
+
+    /// Pauses or resumes the task's schedule. A resumed schedule counts from now, so runs missed
+    /// while it was paused don't catch up.
+    pub fn set_task_paused(&mut self, id: Uuid, paused: bool) -> Result<(), String> {
+        let mut task = self.task(id).cloned().ok_or("The task no longer exists.")?;
+        task.paused = paused;
+        if !paused {
+            task.schedule_from = Some(Utc::now());
+        }
+        self.upsert_task(task)
+    }
+
+    /// Notes that the scheduler dealt with the task's run due at `due`, so it isn't run again.
+    pub(crate) fn mark_task_due(&mut self, id: Uuid, due: DateTime<Utc>) {
+        if let Some(task) = self.tasks.tasks.iter_mut().find(|task| task.id == id) {
+            task.schedule_from = Some(due);
+        }
+        if let Err(error) = self.save_tasks() {
+            log::warn!("Could not save when a task last ran: {error}");
+        }
+    }
+
+    fn task_approval(&self, task: &Task, protected_writes: bool) -> Approval {
+        let connections = task
+            .spec
+            .connections()
+            .into_iter()
+            .filter_map(|id| Some((id, identity(self.connection_by_id(id)?))))
+            .collect();
+        Approval { connections, protected_writes }
+    }
+
+    /// The name of the Production or protected connection the task writes to, if it writes to
+    /// one.
+    pub fn task_protected_target(&self, task: &Task) -> Option<String> {
+        let connection = self.connection_by_id(task.spec.write_connection()?)?;
+        (connection.protected || connection.environment == Some(ConnectionEnvironment::Production))
+            .then(|| connection.name.clone())
+    }
+
+    /// Why a scheduled run of the task may not write now, if it may not: a connection it uses
+    /// changed or was deleted since its schedule was approved.
+    pub fn task_approval_problem(&self, task: &Task) -> Option<String> {
+        task.spec.write_connection()?;
+        let Some(approval) = &task.approval else {
+            return Some("This task's schedule hasn't been approved.".into());
+        };
+        for id in task.spec.connections() {
+            let Some(connection) = self.connection_by_id(id) else {
+                return Some("A connection this task uses was deleted.".into());
+            };
+            let approved = approval.connections.iter().find(|(approved, _)| *approved == id);
+            if approved.is_none_or(|(_, hash)| *hash != identity(connection)) {
+                return Some("Connection settings changed since this task was approved.".into());
+            }
+        }
+        if !approval.protected_writes
+            && let Some(name) = self.task_protected_target(task)
+        {
+            return Some(format!(
+                "Scheduled runs may not write to {name}, which is Production or protected."
+            ));
+        }
+        None
     }
 
     fn save_tasks(&self) -> Result<(), String> {

@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::schedule::Schedule;
 use crate::connection::ops::compare::{CompareCounts, Side};
 use crate::connection::ops::compare_database::SyncMode;
 use crate::connection::ops::compare_sync::SyncSummary;
@@ -21,8 +22,34 @@ pub struct Task {
     pub spec: TaskSpec,
     #[serde(default)]
     pub safety: super::safety::SafetyLimit,
+    /// When runs start by themselves.
+    #[serde(default)]
+    pub schedule: Schedule,
+    /// The schedule is kept, but no run starts by itself.
+    #[serde(default)]
+    pub paused: bool,
+    /// The due time handled last, or when the schedule was set or resumed. The next run is the
+    /// schedule's first time after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_from: Option<DateTime<Utc>>,
+    /// For a task that writes: what was approved when it got its schedule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<Approval>,
+    /// A scheduled export keeps only this many of its newest files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_files: Option<u32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// What was approved when a task that writes got its schedule. Scheduled runs stop when a
+/// connection no longer matches it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Approval {
+    /// Each connection the task uses, with its identity hash at the time.
+    pub connections: Vec<(Uuid, String)>,
+    /// Scheduled runs may write to a Production or protected connection.
+    pub protected_writes: bool,
 }
 
 impl Task {
@@ -34,6 +61,11 @@ impl Task {
             name,
             spec,
             safety: Default::default(),
+            schedule: Schedule::Manual,
+            paused: false,
+            schedule_from: None,
+            approval: None,
+            keep_files: None,
             created_at: now,
             updated_at: now,
         }
@@ -211,6 +243,11 @@ pub enum RunTrigger {
     Preview,
     /// Reverts the task's last sync run.
     Undo,
+    /// Started by the schedule.
+    Schedule,
+    /// Started by the schedule for a time that passed while OpenMango was closed or the computer
+    /// slept.
+    CatchUp,
 }
 
 impl RunTrigger {
@@ -219,7 +256,14 @@ impl RunTrigger {
             Self::Manual => "Run now",
             Self::Preview => "Preview",
             Self::Undo => "Undo",
+            Self::Schedule => "Schedule",
+            Self::CatchUp => "Catch-up",
         }
+    }
+
+    /// A run that did what the task does, as opposed to previewing or undoing it.
+    pub fn is_run(self) -> bool {
+        matches!(self, Self::Manual | Self::Schedule | Self::CatchUp)
     }
 }
 
@@ -234,6 +278,8 @@ pub enum RunStatus {
     Cancelled,
     /// Still marked running when the app started: it was cut short by a crash or a forced quit.
     Interrupted,
+    /// A scheduled run that didn't start; its log says why.
+    Skipped,
 }
 
 impl RunStatus {
@@ -245,6 +291,7 @@ impl RunStatus {
             Self::Failed => "Failed",
             Self::Cancelled => "Cancelled",
             Self::Interrupted => "Interrupted",
+            Self::Skipped => "Skipped",
         }
     }
 }
@@ -329,6 +376,15 @@ impl Run {
         }
         self.collections.push(CollectionRun { name: name.to_string(), ..Default::default() });
         self.collections.last_mut().expect("just pushed")
+    }
+
+    /// A scheduled run that didn't start, recorded with why.
+    pub fn skipped(task_id: Uuid, reason: impl Into<String>) -> Self {
+        let mut run = Self::start(task_id, RunTrigger::Schedule);
+        run.log(LogLevel::Info, reason);
+        run.status = RunStatus::Skipped;
+        run.finished_at = Some(run.started_at);
+        run
     }
 
     /// Ends the run. The status follows from what happened unless it was cancelled.

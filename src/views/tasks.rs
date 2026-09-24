@@ -2,6 +2,7 @@
 //! of every run.
 
 use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -19,6 +20,7 @@ use crate::state::{AppCommands, AppState, TabKey, TransferMode};
 use crate::tasks::model::{LogLevel, Run, RunStatus, RunTrigger, Task, TaskKind};
 use crate::theme::{islands, spacing};
 use crate::views::compare::app_icon;
+use crate::views::task_schedule::{open_schedule_dialog, run_time, tabular};
 
 pub struct TasksView {
     state: Entity<AppState>,
@@ -97,6 +99,9 @@ fn status_icon(status: RunStatus, cx: &App) -> AnyElement {
         RunStatus::Interrupted => {
             app_icon("circle-stop").xsmall().text_color(theme.warning).into_any_element()
         }
+        RunStatus::Skipped => {
+            app_icon("skip-forward").xsmall().text_color(theme.muted_foreground).into_any_element()
+        }
     }
 }
 
@@ -139,7 +144,7 @@ fn run_summary(kind: TaskKind, run: &Run) -> String {
             let restored = run.writes().written as u64;
             return format!("Undo: {} put back", plural(restored, "document", "documents"));
         }
-        RunTrigger::Manual => {}
+        RunTrigger::Manual | RunTrigger::Schedule | RunTrigger::CatchUp => {}
     }
     match kind {
         TaskKind::Export | TaskKind::Import | TaskKind::Copy => {
@@ -213,6 +218,50 @@ fn collection_summary(kind: TaskKind, run: &crate::tasks::model::CollectionRun) 
         ..Run::start(Uuid::nil(), crate::tasks::model::RunTrigger::Manual)
     };
     run_summary(kind, &single)
+}
+
+/// The schedule in a few words, as the list shows it: "Daily at 02:00", "Manual" or "Paused".
+fn schedule_summary(task: &Task) -> String {
+    if task.paused && !task.schedule.is_manual() { "Paused".into() } else { task.schedule.label() }
+}
+
+/// When the task's schedule runs it next.
+fn next_run(task: &Task) -> Option<chrono::DateTime<chrono::Local>> {
+    let now = chrono::Local::now();
+    let from = task.schedule_from.map(|from| from.with_timezone(&chrono::Local));
+    task.schedule.next_after(&from.filter(|from| *from > now).unwrap_or(now))
+}
+
+/// Records the connections as they are now for the task's scheduled runs, after asking when it
+/// writes to a Production or protected connection.
+fn approve_again(state: Entity<AppState>, task: &Task, window: &mut Window, cx: &mut App) {
+    let id = task.id;
+    let target = state.read(cx).task_protected_target(task);
+    let approve = move |protected_writes: bool, cx: &mut App| {
+        state.update(cx, |app, cx| {
+            if let Err(error) = app.approve_task(id, protected_writes) {
+                app.set_status_message(Some(crate::state::StatusMessage::error(error)));
+            }
+            cx.notify();
+        })
+    };
+    match target {
+        Some(target) => open_confirm_dialog(
+            window,
+            cx,
+            format!("Allow scheduled writes to {target}?"),
+            format!(
+                "{target} is a Production or protected connection. Each scheduled run of “{}” \
+                 writes to it without asking. The safety limit still stops a run that would delete \
+                 or replace too much.",
+                task.name
+            ),
+            "Allow scheduled writes",
+            true,
+            move |_, cx| approve(true, cx),
+        ),
+        None => approve(false, cx),
+    }
 }
 
 fn last_result(app: &AppState, task: &Task) -> String {
@@ -411,7 +460,7 @@ impl TasksView {
                         .child(div().text_xs().text_color(muted).truncate().child(format!(
                             "{} · {}",
                             task.spec.kind().label(),
-                            task.spec.subject()
+                            schedule_summary(task)
                         )))
                         .child(div().text_xs().text_color(muted).truncate().child(result)),
                 )
@@ -459,8 +508,11 @@ impl TasksView {
             task.spec.kind(),
             TaskKind::Sync | TaskKind::Copy | TaskKind::Import | TaskKind::Export
         );
+        let scheduled = !task.schedule.is_manual();
+        let paused = task.paused;
         let actions = div()
             .flex()
+            .flex_wrap()
             .gap(spacing::xs())
             .child(run_button)
             .when(previewable, |actions| {
@@ -491,6 +543,40 @@ impl TasksView {
                         move |_, _, cx| state.update(cx, |app, cx| app.edit_task(id, cx))
                     }),
             )
+            .child(
+                Button::new("task-schedule")
+                    .icon(app_icon("calendar-clock").xsmall())
+                    .label("Schedule…")
+                    .small()
+                    .ghost()
+                    .tooltip("When it runs by itself, and its safety limit")
+                    .on_click({
+                        let state = state.clone();
+                        move |_, window, cx| {
+                            open_schedule_dialog(state.clone(), id, window, cx);
+                        }
+                    }),
+            )
+            .when(scheduled, |actions| {
+                let state = state.clone();
+                actions.child(
+                    Button::new("task-pause")
+                        .icon(app_icon(if paused { "play" } else { "pause" }).xsmall())
+                        .label(if paused { "Resume" } else { "Pause" })
+                        .small()
+                        .ghost()
+                        .on_click(move |_, _, cx| {
+                            state.update(cx, |app, cx| {
+                                if let Err(error) = app.set_task_paused(id, !paused) {
+                                    app.set_status_message(Some(
+                                        crate::state::StatusMessage::error(error),
+                                    ));
+                                }
+                                cx.notify();
+                            })
+                        }),
+                )
+            })
             .child(
                 Button::new("task-delete")
                     .icon(app_icon("trash").xsmall())
@@ -543,10 +629,121 @@ impl TasksView {
                         task.spec.kind().label(),
                         task.spec.subject()
                     )))
-                    .child(div().pt(spacing::xs()).child(actions)),
+                    .child(div().pt(spacing::xs()).child(actions))
+                    .child(self.render_schedule(task, cx)),
             )
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
+    }
+
+    /// The Schedule and Safety rows, and why scheduled runs can't write when they can't.
+    fn render_schedule(&self, task: &Task, cx: &mut Context<Self>) -> AnyElement {
+        let app = self.state.read(cx);
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let id = task.id;
+        let scheduled = !task.schedule.is_manual();
+        let lines = |first: AnyElement, second: String| {
+            div()
+                .flex()
+                .flex_col()
+                .text_sm()
+                .child(first)
+                .child(div().text_color(muted).font_features(tabular()).child(second))
+                .into_any_element()
+        };
+
+        let queued = app.tasks.queue.iter().any(|(queued, ..)| *queued == id);
+        let value = if !scheduled {
+            lines("Manual".into_any_element(), "Runs when you choose Run now.".into())
+        } else if task.paused {
+            let first = div()
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .child(app_icon("pause").xsmall().text_color(muted))
+                .child("Paused")
+                .child(div().text_color(muted).child(format!("· {}", task.schedule.label())));
+            lines(first.into_any_element(), "Resume to run it on its schedule again.".into())
+        } else {
+            let next = if queued {
+                "Due now, waiting for another task to finish.".to_string()
+            } else {
+                next_run(task)
+                    .map_or("No run coming up.".into(), |at| format!("Next: {}", run_time(at)))
+            };
+            lines(format!("{}, local time", task.schedule.label()).into_any_element(), next)
+        };
+        // The same label and value list the reference peek uses.
+        let mut facts = DescriptionList::new()
+            .columns(1)
+            .label_width(px(110.0))
+            .child(DescriptionItem::new("Schedule").value(value));
+
+        if task.spec.write_connection().is_some() {
+            let limit = &task.safety;
+            let first = format!(
+                "More than {}% of a collection, or {} times the usual, deleted or replaced",
+                limit.percent, limit.jump
+            );
+            let mut second = format!(
+                "Run now asks first; a scheduled run stops before writing. Changes under {} \
+                 documents never count.",
+                format_number(limit.floor)
+            );
+            if let Some(target) = app.task_protected_target(task)
+                && task.approval.as_ref().is_some_and(|approval| approval.protected_writes)
+            {
+                second.push_str(&format!(" Scheduled runs may write to {target}."));
+            }
+            facts = facts.child(
+                DescriptionItem::new("Safety").value(lines(first.into_any_element(), second)),
+            );
+        }
+        let mut section = div().flex().flex_col().gap(spacing::sm()).pt(spacing::md()).child(facts);
+
+        let problem = scheduled.then(|| app.task_approval_problem(task)).flatten();
+        if let Some(problem) = problem {
+            let fixable =
+                task.spec.connections().iter().all(|id| app.connection_by_id(*id).is_some());
+            let state = self.state.clone();
+            let task = task.clone();
+            section = section.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(spacing::sm())
+                    .p(spacing::sm())
+                    .rounded(crate::theme::borders::radius_md())
+                    .bg(theme.warning.opacity(0.1))
+                    .child(div().pt(px(3.0)).child(Icon::new(IconName::TriangleAlert).xsmall().text_color(theme.warning)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .text_sm()
+                            .child(div().font_weight(FontWeight::MEDIUM).child(problem))
+                            .child(div().text_color(muted).child(if fixable {
+                                "Scheduled runs fail until you approve the connections as they are now."
+                            } else {
+                                "Scheduled runs fail until you edit the task to choose another connection."
+                            })),
+                    )
+                    .when(fixable, |banner| {
+                        banner.child(
+                            Button::new("task-approve")
+                                .label("Approve again")
+                                .small()
+                                .on_click(move |_, window, cx| {
+                                    approve_again(state.clone(), &task, window, cx)
+                                }),
+                        )
+                    }),
+            );
+        }
+        section.into_any_element()
     }
 
     fn render_history(&self, task: &Task, cx: &mut Context<Self>) -> AnyElement {
@@ -598,6 +795,7 @@ impl TasksView {
                 .rounded(crate::theme::borders::radius_md())
                 .cursor_pointer()
                 .hover(|row| row.bg(cx.theme().list_hover))
+                .font_features(tabular())
                 .on_click(cx.listener(move |view, _, _, cx| {
                     view.selected_run = Some(run_id);
                     cx.notify();
@@ -704,10 +902,42 @@ impl TasksView {
                     .children(run.stops.iter().map(|stop| div().text_sm().child(stop.clone())))
                     .when(run.trigger == RunTrigger::Preview, |block| {
                         block.child(div().text_xs().text_color(muted).child(
-                            "Run now still runs it, after asking: the question explains why and \
-                             its answer is Run anyway.",
+                            "Run now asks first, and its answer is Run anyway. A scheduled run \
+                             stops here instead.",
                         ))
-                    }),
+                    })
+                    .when(
+                        matches!(run.trigger, RunTrigger::Schedule | RunTrigger::CatchUp)
+                            && !self.state.read(cx).task_is_running(task.id),
+                        |block| {
+                            let (state, task_id) = (self.state.clone(), task.id);
+                            block.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(spacing::sm())
+                                    .child(
+                                        Button::new("task-run-anyway")
+                                            .label("Run anyway…")
+                                            .small()
+                                            .on_click(move |_, window, cx| {
+                                                AppCommands::run_task(
+                                                    state.clone(),
+                                                    task_id,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child("Runs it once now, after asking."),
+                                    ),
+                            )
+                        },
+                    ),
             );
         }
 
@@ -1030,6 +1260,45 @@ mod tests {
         draw(cx);
         assert!(cx.debug_bounds("task-run-detail").is_none());
         assert!(cx.debug_bounds(selector(format!("task-run-{run_id}"))).is_none());
+    }
+
+    /// In a narrow window the actions wrap instead of running out of view.
+    #[gpui_kit::test]
+    fn the_actions_wrap_in_a_narrow_window(cx: &mut TestAppContext) {
+        let (_directory, state) = setup(cx);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
+            Root::new(view, window, cx).bordered(false)
+        });
+        cx.simulate_resize(size(px(700.0), px(700.0)));
+        let mut config = CompareConfig { scope: CompareScope::Databases, ..Default::default() };
+        config.sides[0].database = "openmango_dbcompare_right_with_a_long_name".into();
+        config.sides[1].database = "openmango_dbcompare_left_with_a_long_name".into();
+        let mut task = Task::new(
+            "Sync".into(),
+            TaskSpec::Sync {
+                config,
+                target: Side::Right,
+                mode: SyncMode::AddMissing,
+                excluded: vec![],
+            },
+        );
+        task.schedule = crate::tasks::schedule::Schedule::Every { minutes: 20 };
+        state.update(cx, |app, cx| {
+            app.upsert_task(task).unwrap();
+            app.open_tasks_tab(cx);
+        });
+        draw(cx);
+        draw(cx);
+        let nodes = cx.update(|window, _| gpui_kit::base::test_support::snapshots(window));
+        let window = cx.update(|window, _| window.bounds().size.width);
+        for label in ["Run now", "Preview", "Edit", "Schedule…", "Pause", "Delete"] {
+            let button = nodes
+                .iter()
+                .find(|node| node.label() == Some(label))
+                .unwrap_or_else(|| panic!("{label} is on screen"));
+            assert!(button.bounds().right() <= window, "{label}: {:?}", button.bounds());
+        }
     }
 
     #[gpui_kit::test]

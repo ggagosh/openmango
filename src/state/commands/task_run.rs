@@ -338,16 +338,26 @@ pub(super) struct Watch {
     pub expired: bool,
     /// When the run first had to retry; retrying stops `RETRY_BUDGET` after it.
     pub retrying_since: Option<Instant>,
+    /// Retrying also stops at this time: a scheduled run's next run is due.
+    pub until: Option<Instant>,
 }
 
 impl Watch {
-    pub(super) fn new(run: CancellationToken) -> Self {
-        Self { run, started: Instant::now(), stalled: false, expired: false, retrying_since: None }
+    pub(super) fn new(run: CancellationToken, until: Option<Instant>) -> Self {
+        Self {
+            run,
+            started: Instant::now(),
+            stalled: false,
+            expired: false,
+            retrying_since: None,
+            until,
+        }
     }
 
     /// Whether the run may retry once more. The budget starts at its first retry.
     pub(super) fn may_retry(&mut self) -> bool {
-        self.retrying_since.get_or_insert_with(Instant::now).elapsed() < RETRY_BUDGET
+        self.until.is_none_or(|until| Instant::now() < until)
+            && self.retrying_since.get_or_insert_with(Instant::now).elapsed() < RETRY_BUDGET
     }
 
     /// Reads the attempt's messages until its sender is gone, handing each to `on`.
@@ -404,7 +414,7 @@ mod tests {
         let stalled = std::rc::Rc::new(std::cell::Cell::new(None));
         let result = stalled.clone();
         cx.spawn(async move |mut cx| {
-            let mut watch = Watch::new(CancellationToken::new());
+            let mut watch = Watch::new(CancellationToken::new(), None);
             watch.drain(&mut cx, &watched, &mut receiver, Duration::ZERO, |_, _| {}).await;
             result.set(Some(watch.stalled));
         })

@@ -2,4 +2,5 @@
 
 pub mod model;
 pub mod safety;
+pub mod schedule;
 pub mod store;
