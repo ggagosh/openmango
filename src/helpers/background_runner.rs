@@ -4,7 +4,8 @@
 //! On macOS it is a launch agent inside the app bundle, at
 //! `Contents/Library/LaunchAgents/com.openmango.app.tasks.plist`, registered with `SMAppService`
 //! so it shows in System Settings → General → Login Items. On Windows it is a Task Scheduler task,
-//! `OpenMango\Run due tasks`. Linux comes later.
+//! `OpenMango\Run due tasks`. On Linux it is a systemd user timer, `openmango-tasks.timer`, that
+//! starts the AppImage.
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RunnerStatus {
@@ -18,43 +19,54 @@ pub enum RunnerStatus {
     Unavailable(&'static str),
 }
 
-/// The button that opens where the entry is switched on or off.
-pub const OPEN_SETTINGS: &str =
-    if cfg!(windows) { "Open Task Scheduler" } else { "Open Login Items" };
+/// The button that switches the entry back on, or opens where the user does.
+pub const OPEN_SETTINGS: &str = if cfg!(windows) {
+    "Open Task Scheduler"
+} else if cfg!(target_os = "linux") {
+    "Turn on"
+} else {
+    "Open Login Items"
+};
 /// How to switch the entry back on.
 pub const SWITCH_ON: &str = if cfg!(windows) {
     "Enable “Run due tasks” in Task Scheduler, in the OpenMango folder."
+} else if cfg!(target_os = "linux") {
+    "Its systemd timer, openmango-tasks.timer, is disabled."
 } else {
     "Switch OpenMango on in System Settings, under Login Items."
 };
 /// Where the entry is listed.
 pub const LISTED_IN: &str = if cfg!(windows) {
     "It's listed in Task Scheduler, in the OpenMango folder."
+} else if cfg!(target_os = "linux") {
+    "It's the systemd user timer openmango-tasks.timer, and runs while you're signed in."
 } else {
     "It's listed in System Settings under Login Items."
 };
 
+#[cfg(target_os = "linux")]
+pub use linux::{keyring_locked, open_settings, register, status, unregister};
 #[cfg(target_os = "macos")]
 pub use mac::{open_settings, register, status, unregister};
 #[cfg(windows)]
 pub use win::{open_settings, register, status, unregister};
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 pub fn status() -> RunnerStatus {
-    RunnerStatus::Unavailable("Running while OpenMango is closed comes to Linux later.")
+    RunnerStatus::Unavailable("Running while OpenMango is closed isn't available on this system.")
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 pub fn register() -> Result<RunnerStatus, String> {
     Ok(status())
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 pub fn unregister() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 pub fn open_settings() {}
 
 #[cfg(target_os = "macos")]
@@ -231,6 +243,172 @@ mod win {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::path::PathBuf;
+    use std::process::{Command, Output};
+
+    use super::RunnerStatus;
+
+    const TIMER: &str = "openmango-tasks.timer";
+    const SERVICE: &str = "openmango-tasks.service";
+    const DEV: &str = "Development builds don't add the systemd timer.";
+    const NO_APPIMAGE: &str = "Needs OpenMango started from its AppImage.";
+    const NO_SYSTEMD: &str = "Needs a systemd user session, which this system doesn't have.";
+
+    fn systemctl(args: &[&str]) -> std::io::Result<Output> {
+        Command::new("systemctl").arg("--user").args(args).output()
+    }
+
+    fn succeeded(output: std::io::Result<Output>) -> Result<(), String> {
+        let output = output.map_err(|error| error.to_string())?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+
+    fn units() -> Option<PathBuf> {
+        dirs::config_dir().map(|config| config.join("systemd/user"))
+    }
+
+    /// The service as this OpenMango would write it, or why there can't be one.
+    fn service() -> Result<String, &'static str> {
+        // Development builds would run a program cargo replaces; they're tried with
+        // `--run-due-tasks`.
+        if cfg!(debug_assertions) {
+            return Err(DEV);
+        }
+        let image = crate::helpers::linux::appimage_path().map_err(|_| NO_APPIMAGE)?;
+        let extract = std::env::var_os("APPIMAGE_EXTRACT_AND_RUN").is_some();
+        super::service_unit(&image.to_string_lossy(), extract).ok_or(NO_APPIMAGE)
+    }
+
+    pub fn status() -> RunnerStatus {
+        let service = match service() {
+            Ok(service) => service,
+            Err(why) => return RunnerStatus::Unavailable(why),
+        };
+        if !systemctl(&["show-environment"]).is_ok_and(|output| output.status.success()) {
+            return RunnerStatus::Unavailable(NO_SYSTEMD);
+        }
+        let state = systemctl(&["is-enabled", TIMER])
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .unwrap_or_default();
+        let current = units().and_then(|units| std::fs::read_to_string(units.join(SERVICE)).ok());
+        match state.as_str() {
+            "disabled" | "masked" => RunnerStatus::NeedsApproval,
+            // A timer for an AppImage that moved, or from another version, is written again.
+            "enabled" if current.as_deref() == Some(&*service) => RunnerStatus::Enabled,
+            _ => RunnerStatus::NotRegistered,
+        }
+    }
+
+    pub fn register() -> Result<RunnerStatus, String> {
+        let service = match service() {
+            Ok(service) => service,
+            Err(why) => return Ok(RunnerStatus::Unavailable(why)),
+        };
+        let units = units().ok_or("The config folder can't be found.")?;
+        std::fs::create_dir_all(&units).map_err(|error| error.to_string())?;
+        std::fs::write(units.join(SERVICE), service).map_err(|error| error.to_string())?;
+        std::fs::write(units.join(TIMER), super::TIMER_UNIT).map_err(|error| error.to_string())?;
+        succeeded(systemctl(&["daemon-reload"]))?;
+        succeeded(systemctl(&["enable", "--now", TIMER]))?;
+        Ok(status())
+    }
+
+    pub fn unregister() -> Result<(), String> {
+        if service().is_err() {
+            return Ok(());
+        }
+        let _ = systemctl(&["disable", "--now", TIMER]);
+        if let Some(units) = units() {
+            for unit in [TIMER, SERVICE] {
+                match std::fs::remove_file(units.join(unit)) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        succeeded(systemctl(&["daemon-reload"]))
+    }
+
+    /// There's no settings window for systemd timers, so this writes the timer again and
+    /// enables it.
+    pub fn open_settings() {
+        if let Err(error) = register() {
+            log::warn!("The systemd timer couldn't be turned on: {error}");
+        }
+    }
+
+    /// Whether the keyring holding the passwords is locked. Reading from it would then ask to
+    /// unlock it, and a run with no window would wait for an answer while holding the task lock.
+    pub fn keyring_locked() -> bool {
+        Command::new("busctl")
+            .args([
+                "--user",
+                "--timeout=5",
+                "get-property",
+                "org.freedesktop.secrets",
+                "/org/freedesktop/secrets/aliases/default",
+                "org.freedesktop.Secret.Collection",
+                "Locked",
+            ])
+            .output()
+            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "b true")
+    }
+}
+
+/// The systemd timer: one minute past each quarter hour while the user's systemd session runs,
+/// that is, while they're signed in. `Persistent` starts a run missed while it didn't, once.
+#[cfg(any(target_os = "linux", test))]
+const TIMER_UNIT: &str = "[Unit]
+Description=Look for OpenMango tasks that are due while OpenMango is closed
+
+[Timer]
+OnCalendar=*:1/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+";
+
+/// The systemd service the timer starts: the AppImage with `--run-due-tasks`, stopped after 25
+/// hours since a run stops itself at 24. A oneshot service still running isn't started again.
+/// `None` for a path a unit file can't hold.
+#[cfg(any(target_os = "linux", test))]
+fn service_unit(image: &str, extract_and_run: bool) -> Option<String> {
+    if !image.starts_with('/') || image.contains(['\n', '\r']) {
+        return None;
+    }
+    let mut quoted = String::new();
+    for ch in image.chars() {
+        match ch {
+            '\\' | '"' => {
+                quoted.push('\\');
+                quoted.push(ch);
+            }
+            '%' => quoted.push_str("%%"),
+            '$' => quoted.push_str("$$"),
+            _ => quoted.push(ch),
+        }
+    }
+    let environment = if extract_and_run { "Environment=APPIMAGE_EXTRACT_AND_RUN=1\n" } else { "" };
+    Some(format!(
+        "[Unit]
+Description=Run OpenMango tasks that are due while OpenMango is closed
+
+[Service]
+Type=oneshot
+{environment}ExecStart=\"{quoted}\" --run-due-tasks
+TimeoutStartSec=25h
+"
+    ))
+}
+
 /// The Task Scheduler definition. It runs as the signed-in user, only while they're signed in,
 /// which is what lets it read the passwords Credential Manager keeps for them.
 ///
@@ -283,6 +461,47 @@ fn task_xml(exe: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_unit_quotes_the_appimage_path() {
+        let unit = service_unit(r#"/home/me/My "Apps" 100%$\OpenMango.AppImage"#, true).unwrap();
+        assert!(unit.contains(
+            r#"ExecStart="/home/me/My \"Apps\" 100%%$$\\OpenMango.AppImage" --run-due-tasks"#
+        ));
+        assert!(unit.contains("Environment=APPIMAGE_EXTRACT_AND_RUN=1\nExecStart="));
+        assert!(!service_unit("/x", false).unwrap().contains("Environment="));
+        assert!(service_unit("relative/OpenMango.AppImage", false).is_none());
+        assert!(service_unit("/tmp/x\nExecStart=/bin/evil", false).is_none());
+        assert!(TIMER_UNIT.contains("OnCalendar=*:1/15\nPersistent=true"));
+    }
+
+    /// systemd's own check of the two units, where it's installed (the Linux CI machines).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn systemd_accepts_the_units() {
+        let Ok(analyze) = which_systemd_analyze() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let service = dir.path().join("openmango-tasks.service");
+        let timer = dir.path().join("openmango-tasks.timer");
+        std::fs::write(&service, service_unit(&exe.to_string_lossy(), false).unwrap()).unwrap();
+        std::fs::write(&timer, TIMER_UNIT).unwrap();
+        let output = std::process::Command::new(analyze)
+            .arg("verify")
+            .args([&service, &timer])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn which_systemd_analyze() -> Result<std::path::PathBuf, ()> {
+        ["/usr/bin/systemd-analyze", "/bin/systemd-analyze"]
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .find(|path| path.exists())
+            .ok_or(())
+    }
 
     #[test]
     fn task_xml_escapes_the_program_path() {

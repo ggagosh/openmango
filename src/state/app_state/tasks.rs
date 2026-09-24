@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use gpui_kit::{Context, Subscription};
+use gpui_kit::{AppContext as _, Context, Subscription};
 use uuid::Uuid;
 
 use crate::connection::CancellationToken;
@@ -210,10 +210,8 @@ impl AppState {
     /// Sets up the system entry that starts the background runner while any task may run with
     /// OpenMango closed, and removes it once none may.
     pub(crate) fn sync_background_runner(&mut self) {
-        let wanted =
-            self.tasks.tasks.iter().any(|task| task.run_when_closed && !task.schedule.is_manual());
         let status = background_runner::status();
-        let result = match (wanted, status) {
+        let result = match (self.wants_background_runner(), status) {
             (true, RunnerStatus::NotRegistered) => background_runner::register(),
             (false, RunnerStatus::Enabled | RunnerStatus::NeedsApproval) => {
                 background_runner::unregister().map(|()| RunnerStatus::NotRegistered)
@@ -230,6 +228,27 @@ impl AppState {
                 background_runner::status()
             }
         };
+    }
+
+    fn wants_background_runner(&self) -> bool {
+        self.tasks.tasks.iter().any(|task| task.run_when_closed && !task.schedule.is_manual())
+    }
+
+    /// Reads the background runner's status again, off the main thread, since it's switched on
+    /// and off outside OpenMango too.
+    pub(crate) fn refresh_background_runner(&mut self, cx: &mut Context<Self>) {
+        if !self.wants_background_runner() {
+            return;
+        }
+        let status = cx.background_spawn(async { background_runner::status() });
+        cx.spawn(async move |state, cx| {
+            let status = status.await;
+            let _ = state.update(cx, |state, cx| {
+                state.tasks.runner = status;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Records the connections a task uses as they are now, for its scheduled runs to write.

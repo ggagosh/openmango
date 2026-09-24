@@ -627,6 +627,13 @@ impl AppRoot {
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
             crate::theme::sync_system_theme(&this.state, window, cx);
         }));
+        // The background runner is switched on and off in Login Items, Task Scheduler or
+        // systemd; coming back to OpenMango picks that up.
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.state.update(cx, |state, cx| state.refresh_background_runner(cx));
+            }
+        }));
         subscriptions.push(cx.observe(&state, |this, state, cx| {
             let enabled = state.read(cx).settings.mcp.enabled;
             let access_signature = Self::mcp_access_signature(state.read(cx));

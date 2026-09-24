@@ -226,6 +226,37 @@ the background runner (PR 4), and section 7.4.
 - **Not verified yet:** Task Scheduler actually starting the installed program, and that run
   reading the passwords, which need a Windows PC with OpenMango installed and a signed-in user.
 
+**PR 6, Linux — built, checked on the Linux CI machines, not yet in a desktop session.**
+
+- **The entry** is a systemd user timer and service in `~/.config/systemd/user`:
+  `openmango-tasks.timer` with `OnCalendar=*:1/15` and `Persistent=true`, and
+  `openmango-tasks.service`, a oneshot that starts the AppImage with `--run-due-tasks`
+  (`TimeoutStartSec=25h`, and `APPIMAGE_EXTRACT_AND_RUN=1` when OpenMango runs that way). A
+  oneshot still running isn't started again. Written by `src/helpers/background_runner.rs`, then
+  `systemctl --user daemon-reload` and `enable --now`; removing disables it and deletes both.
+- **It runs while the user is signed in**, since the user's systemd manager stops at sign-out
+  unless lingering is on. `Persistent` makes up a start missed while it didn't run, once.
+- **Only the AppImage** can have it, through `helpers::linux::appimage_path`, the file the updater
+  also uses. When the AppImage has moved, or the service differs from what this version writes,
+  the status reads as not registered and the timer is written again.
+- **Status** from `systemctl --user is-enabled`; `disabled` or `masked` needs attention. Without
+  a systemd user session (`systemctl --user show-environment` fails), the option is shown off
+  with why. There's no settings window for timers, so the fix button is Turn on, which writes and
+  enables the timer again.
+- **A locked keyring** (section 5.3): gpui unlocks the Secret Service collection before reading,
+  which shows a dialog. With no window, the run would wait for an answer while holding the task
+  lock, and an OpenMango opened meanwhile would wait too. So the runner first asks the default
+  collection's `Locked` property with `busctl`, and when it's locked, logs it and exits. Changed
+  from the plan: the due runs aren't recorded as waiting; they stay due, for the next start or
+  for OpenMango when it opens, which asks to unlock the keyring as usual.
+- **Every system:** the runner's status is read again, off the main thread, whenever OpenMango's
+  window becomes active, so switching it back on in Login Items, Task Scheduler or systemd clears
+  the attention without a restart.
+- **Checked:** the module compiles and passes clippy for Linux. On the Linux CI machines,
+  `systemd-analyze verify` accepts both units, and a unit test covers quoting the AppImage path.
+- **Not verified yet:** the timer starting the AppImage in a desktop session, reading the
+  passwords from an unlocked keyring, and skipping while it's locked.
+
 ## 1. What the evidence says
 
 **DBeaver**, the closest comparable desktop database tool:
@@ -518,7 +549,7 @@ Per platform:
 |---|---|---|
 | macOS | A launch agent bundled in the app and registered with `SMAppService` | Starts every 900 seconds. The app reads its status to warn when it's switched off in Login Items |
 | Windows | A Task Scheduler task, through `schtasks` | Repeats every 15 minutes. `StartWhenAvailable` on. `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` off. `ExecutionTimeLimit`, which stops a task after 72 hours by default, set just above OpenMango's own run time limit (section 7.2) |
-| Linux | A systemd user timer and service | `OnCalendar=*:0/15`, `Persistent=true`. Without a systemd user session, the option is shown as unavailable with the reason |
+| Linux | A systemd user timer and service | `OnCalendar=*:1/15`, `Persistent=true`. Without a systemd user session, the option is shown as unavailable with the reason |
 
 **Passwords without a window.** The run reads them through the same keychain calls as the app:
 
