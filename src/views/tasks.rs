@@ -768,9 +768,12 @@ impl TasksView {
                         cx.notify();
                     }),
                 ),
-                Fix::LoginItems => Button::new("task-fix")
-                    .label("Open Login Items")
-                    .on_click(|_, _, _| crate::helpers::background_runner::open_login_items()),
+                Fix::RunnerSettings => Button::new("task-fix")
+                    .label(crate::helpers::background_runner::OPEN_SETTINGS)
+                    .on_click(move |_, _, cx| {
+                        crate::helpers::background_runner::open_settings();
+                        state.update(cx, |state, cx| state.refresh_background_runner(cx));
+                    }),
             };
             section = section.child(
                 div()

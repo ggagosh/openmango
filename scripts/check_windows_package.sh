@@ -42,6 +42,16 @@ if [[ "${2:-}" == --launch ]]; then
     echo "Installed app stayed open for 15 seconds"
 fi
 
+# The uninstaller removes the Task Scheduler entry OpenMango adds for tasks that run while it's
+# closed; only its name matters here.
+runner='OpenMango\Run due tasks'
+MSYS_NO_PATHCONV=1 schtasks /Create /TN "$runner" /TR notepad.exe /SC MINUTE /MO 15 /F >/dev/null
+
 uninstall
 [[ ! -f "$app/OpenMango.exe" && ! -f "$app/unins000.exe" ]]
+if MSYS_NO_PATHCONV=1 schtasks /Query /TN "$runner" >/dev/null 2>&1; then
+    MSYS_NO_PATHCONV=1 schtasks /Delete /TN "$runner" /F >/dev/null
+    echo "The uninstaller left the Task Scheduler entry behind" >&2
+    exit 1
+fi
 echo "Windows installer, uninstaller, application entry point, and bundled tools passed"
