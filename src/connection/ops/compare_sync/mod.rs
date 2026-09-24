@@ -81,7 +81,8 @@ impl RowOutcome {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SyncSummary {
     pub processed: usize,
     pub written: usize,

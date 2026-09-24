@@ -81,7 +81,7 @@ fn utc_offset_label(offset_minutes: i32) -> String {
 }
 
 /// How long ago (or how far ahead) `then` is, in the largest unit that fits.
-fn relative_age(then_ms: i64, now_ms: i64) -> String {
+pub(crate) fn relative_age(then_ms: i64, now_ms: i64) -> String {
     let seconds = (now_ms - then_ms) / 1000;
     let (amount, unit) = match seconds.abs() {
         s if s < 60 => return "just now".to_string(),

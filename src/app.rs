@@ -1,4 +1,5 @@
 mod actions;
+pub mod background;
 pub(crate) mod dialogs;
 mod menus;
 mod root;

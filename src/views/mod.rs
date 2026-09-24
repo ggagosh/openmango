@@ -11,6 +11,8 @@ pub mod references;
 pub mod relations;
 pub mod results;
 pub mod settings;
+pub mod task_schedule;
+pub mod tasks;
 pub mod transfer;
 
 pub use crate::changelog::ChangelogView;
@@ -24,4 +26,5 @@ pub use json_editor_detached::DetachedJsonEditorView;
 pub use references::ReferencesView;
 pub use relations::RelationsView;
 pub use settings::SettingsView;
+pub use tasks::TasksView;
 pub use transfer::TransferView;

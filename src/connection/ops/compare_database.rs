@@ -176,7 +176,7 @@ pub enum PairMessage {
     Progress(usize, CompareCounts),
     /// `cancelled` in the summary means the collection was skipped or the run cancelled.
     Done(usize, CompareSummary),
-    Failed(usize, String),
+    Failed(usize, crate::error::Failure),
 }
 
 /// One collection to scan: its index in the listing, its name, and the token that skips it.
@@ -228,7 +228,7 @@ pub async fn compare_pairs_async(
         );
         let _ = sender.unbounded_send(match result {
             Ok(summary) => PairMessage::Done(index, summary),
-            Err(error) => PairMessage::Failed(index, error.to_string()),
+            Err(error) => PairMessage::Failed(index, error.into()),
         });
     }
 }
@@ -255,7 +255,7 @@ pub fn pair_collections(
 
 /// What a database sync writes into the target. It never drops collections, never writes to
 /// views or time-series collections, and leaves minor differences as they are.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SyncMode {
     /// Insert the documents the target lacks. Existing documents are left alone.
     #[default]
@@ -317,7 +317,7 @@ pub enum PairSyncMessage {
     Started(usize, Arc<RestoreHandle>),
     Progress(usize, SyncSummary),
     Done(usize, SyncSummary),
-    Failed(usize, String),
+    Failed(usize, crate::error::Failure),
 }
 
 /// A database sync: `pairs` from the other side into `target`, matched by `_id`.
@@ -331,6 +331,9 @@ pub struct DatabaseSync {
     pub restore_dir: PathBuf,
     /// Differences written per read of a collection: `MAX_ROWS`, lower in tests.
     pub pass_rows: usize,
+    /// Write only the deletes the mode makes. A Mirror run as Add and update, then as this,
+    /// deletes only after everything else is written.
+    pub deletes_only: bool,
 }
 
 /// Runs a database sync one collection at a time. Each collection is scanned for the kinds the
@@ -341,8 +344,22 @@ pub async fn sync_pairs_async(
     cancellation: CancellationToken,
     sender: UnboundedSender<PairSyncMessage>,
 ) -> Result<()> {
-    let DatabaseSync { clients, databases, target, mode, pairs, ignore, restore_dir, pass_rows } =
-        sync;
+    let DatabaseSync {
+        clients,
+        databases,
+        target,
+        mode,
+        pairs,
+        ignore,
+        restore_dir,
+        pass_rows,
+        deletes_only,
+    } = sync;
+    let mut kinds = mode.kinds(target);
+    if deletes_only {
+        let extra = if target == Side::Right { DiffKind::OnlyRight } else { DiffKind::OnlyLeft };
+        kinds.retain(|kind| *kind == extra);
+    }
     let destination = if target == Side::Left { 0 } else { 1 };
     if !supports_sync(&clients[destination]).await? {
         return Err(Error::Parse(
@@ -356,12 +373,17 @@ pub async fn sync_pairs_async(
         let [left, right] = [0, 1].map(|side| {
             clients[side].database(&databases[side]).collection::<RawDocumentBuf>(&pair.name)
         });
-        let run =
-            SyncPass { target, mode, ignore: &ignore, pass_rows, cancellation: &cancellation };
+        let run = SyncPass {
+            target,
+            kinds: kinds.clone(),
+            ignore: &ignore,
+            pass_rows,
+            cancellation: &cancellation,
+        };
         let result = run.pair(&pair, [left, right], &restore_dir, &sender).await;
         let _ = sender.unbounded_send(match result {
             Ok(summary) => PairSyncMessage::Done(pair.index, summary),
-            Err(error) => PairSyncMessage::Failed(pair.index, error.to_string()),
+            Err(error) => PairSyncMessage::Failed(pair.index, error.into()),
         });
     }
     Ok(())
@@ -369,7 +391,7 @@ pub async fn sync_pairs_async(
 
 struct SyncPass<'a> {
     target: Side,
-    mode: SyncMode,
+    kinds: Vec<DiffKind>,
     ignore: &'a IgnoreSet,
     pass_rows: usize,
     cancellation: &'a CancellationToken,
@@ -403,7 +425,7 @@ impl SyncPass<'_> {
                 filter: Document::new(),
                 ignore: self.ignore.clone(),
                 row_limit: self.pass_rows,
-                row_kinds: Some(self.mode.kinds(self.target)),
+                row_kinds: Some(self.kinds.clone()),
             };
             let (rows_sender, messages) = futures::channel::mpsc::unbounded();
             let (scan, rows) = tokio::join!(
@@ -537,7 +559,7 @@ pub async fn undo_pairs_async(
         );
         let _ = sender.unbounded_send(match result {
             Ok(summary) => PairSyncMessage::Done(index, summary),
-            Err(error) => PairSyncMessage::Failed(index, error.to_string()),
+            Err(error) => PairSyncMessage::Failed(index, error.into()),
         });
     }
 }

@@ -30,6 +30,7 @@ pub enum View {
     References,
     Relations,
     AgentActivity,
+    Tasks,
     Connections,
     Settings,
     Changelog,
@@ -179,6 +180,7 @@ pub enum TabKey {
     /// returns to the tab that is already open.
     Relations(DatabaseKey),
     AgentActivity,
+    Tasks,
     Connections,
     Settings,
     Changelog,
@@ -455,10 +457,22 @@ impl TransferOptions {
     }
 }
 
+/// A connection a task run opened for itself, for a transfer to use.
+#[derive(Clone, Debug)]
+pub struct TaskClient {
+    pub client: mongodb::Client,
+    /// The address the BSON tools use to reach it through the run's own tunnel.
+    pub tool_uri: Option<String>,
+}
+
 /// Runtime transfer execution state (not serialized)
 #[derive(Default)]
 pub struct TransferRuntime {
     pub is_running: bool,
+    /// The last failure can pass, such as a dropped connection: a task may run it again.
+    pub failure_transient: bool,
+    /// Connections a task run opened for itself, used instead of the sidebar's.
+    pub clients: HashMap<Uuid, TaskClient>,
     pub has_started: bool,
     pub cancellation_requested: bool,
     /// A BSON tool was asked to stop but its exit couldn't be confirmed, so it isn't a clean cancel.
@@ -480,6 +494,8 @@ impl TransferRuntime {
 impl Clone for TransferRuntime {
     fn clone(&self) -> Self {
         Self {
+            failure_transient: self.failure_transient,
+            clients: self.clients.clone(),
             is_running: self.is_running,
             has_started: self.has_started,
             cancellation_requested: self.cancellation_requested,
@@ -534,6 +550,10 @@ pub struct TransferTabState {
     /// Preview state (not serialized)
     #[serde(skip)]
     pub preview: TransferPreview,
+
+    /// The task this tab was opened to edit, if any: saving writes back to that task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<Uuid>,
 }
 
 impl TransferTabState {

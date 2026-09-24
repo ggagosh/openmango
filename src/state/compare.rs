@@ -192,6 +192,8 @@ pub struct CompareDetail {
 }
 
 pub struct CompareTabState {
+    /// The task this tab was opened to edit, if any. It outlives resets between runs.
+    pub task: Option<CompareTaskLink>,
     pub sync: super::compare_sync::CompareSyncState,
     pub connection_identities: [Option<crate::models::ConnectionWriteIdentity>; 2],
     pub config: CompareConfig,
@@ -252,6 +254,7 @@ impl Drop for CompareTabState {
 impl CompareTabState {
     pub fn new(config: CompareConfig) -> Self {
         Self {
+            task: None,
             sync: Default::default(),
             connection_identities: Default::default(),
             config,
@@ -310,8 +313,10 @@ impl CompareTabState {
         if self.compared.is_none() {
             // First run: nothing on screen worth keeping.
             let metadata = self.metadata.clone();
+            let task = self.task.take();
             *self = Self::new(self.config.clone());
             self.metadata = metadata;
+            self.task = task;
             self.compared = Some(self.config.clone());
         } else {
             // Keep the previous results until the new run reports. Wiping them here shows every
@@ -405,6 +410,7 @@ impl CompareTabState {
         });
         self.pairs = pairs;
         self.rebuild_pair_segments();
+        self.apply_task_sync();
         // Cancelled while listing: the scan passes over every collection and says so.
         if self.cancellation.as_ref().is_some_and(CancellationToken::is_cancelled) {
             scans.iter().for_each(|scan| scan.cancellation.cancel());
@@ -465,7 +471,7 @@ impl CompareTabState {
                 self.pair_current = None;
             }
             PairMessage::Failed(index, error) => {
-                self.pair_progress[index] = PairProgress::Failed(error);
+                self.pair_progress[index] = PairProgress::Failed(error.message);
                 self.pair_tokens[index] = None;
                 self.pair_current = None;
             }
@@ -666,5 +672,47 @@ pub fn segment_for(kind: DiffKind) -> usize {
         DiffKind::Different => 3,
         DiffKind::Minor => 4,
         DiffKind::MultipleMatches => 5,
+    }
+}
+/// A Compare tab opened from a task: saving writes back to that task.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompareTaskLink {
+    pub id: Uuid,
+    /// A Sync task's direction, mode and left-out collections, applied once the listing arrives.
+    pub sync: Option<(
+        crate::connection::ops::compare::Side,
+        crate::connection::ops::compare_database::SyncMode,
+        Vec<String>,
+    )>,
+}
+
+impl CompareTabState {
+    /// Puts a Sync task's choices back: its direction, its mode, and its collections unticked.
+    fn apply_task_sync(&mut self) {
+        let Some((target, mode, excluded)) = self.task.as_ref().and_then(|task| task.sync.clone())
+        else {
+            return;
+        };
+        self.sync.set_target(target);
+        self.sync.set_mode(mode);
+        self.sync.excluded = self
+            .pairs
+            .iter()
+            .enumerate()
+            .filter(|(_, pair)| excluded.contains(&pair.name))
+            .map(|(index, _)| index)
+            .collect();
+    }
+
+    /// Names of the collections unticked in the sync list.
+    pub fn sync_excluded_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .sync
+            .excluded
+            .iter()
+            .filter_map(|index| self.pairs.get(*index).map(|pair| pair.name.clone()))
+            .collect();
+        names.sort();
+        names
     }
 }

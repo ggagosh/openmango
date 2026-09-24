@@ -28,7 +28,11 @@ impl AppState {
             (_, TabKey::Relations(_)) => false,
             (
                 _,
-                TabKey::AgentActivity | TabKey::Connections | TabKey::Settings | TabKey::Changelog,
+                TabKey::AgentActivity
+                | TabKey::Tasks
+                | TabKey::Connections
+                | TabKey::Settings
+                | TabKey::Changelog,
             ) => false,
             _ => false,
         };
@@ -431,6 +435,7 @@ impl AppState {
             TabKey::References(_)
             | TabKey::Relations(_)
             | TabKey::AgentActivity
+            | TabKey::Tasks
             | TabKey::Connections
             | TabKey::Settings
             | TabKey::Changelog => {
@@ -499,6 +504,7 @@ impl AppState {
                 }
                 TabKey::Compare(_) => {}
                 TabKey::AgentActivity
+                | TabKey::Tasks
                 | TabKey::Connections
                 | TabKey::Settings
                 | TabKey::Changelog => {

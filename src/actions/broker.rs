@@ -314,6 +314,24 @@ pub fn content_hash(content: &ProposedActionContent) -> Result<String> {
     Ok(to_hex(&hasher.finalize()))
 }
 
+/// A hash of what makes a saved connection this server with these rights: its address, transport,
+/// environment, protection and read-only flag. Agent Activity and task approval compare it to
+/// notice a connection that changed since.
+pub fn connection_identity_hash(connection: &crate::models::SavedConnection) -> Result<String> {
+    let stripped = connection.with_secrets_stripped();
+    hash_serializable(&serde_json::json!({
+        "id": stripped.id,
+        "name": stripped.name,
+        "uri": stripped.uri,
+        "environment": stripped.environment,
+        "protected": stripped.protected,
+        "read_only": stripped.read_only,
+        "ssh": stripped.ssh,
+        "proxy": stripped.proxy,
+        "secret_id": stripped.secret_id,
+    }))
+}
+
 pub fn hash_serializable(value: &impl serde::Serialize) -> Result<String> {
     let bytes = serde_json::to_vec(value).context("Failed to normalize identity")?;
     let mut hasher = Sha256::new();

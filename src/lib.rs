@@ -15,5 +15,6 @@ pub mod models;
 pub mod perf;
 pub mod state;
 pub mod sync;
+pub mod tasks;
 pub mod theme;
 pub mod views;

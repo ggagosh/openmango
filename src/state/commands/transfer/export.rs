@@ -44,7 +44,7 @@ impl AppCommands {
 
         // BSON tools must reuse the active SSH/SOCKS transport rather than the saved URI.
         let connection_uri = if matches!(config.format, TransferFormat::Bson) {
-            match state.read(cx).active_connection_tool_uri(connection_id) {
+            match Self::transfer_tool_uri(&state, transfer_id, connection_id, cx) {
                 Ok(uri) => Some(uri),
                 Err(error) => {
                     state.update(cx, |state, cx| {
@@ -67,7 +67,7 @@ impl AppCommands {
         let client = if matches!(config.format, TransferFormat::Bson) {
             None
         } else {
-            Self::active_client(&state, connection_id, cx)
+            Self::transfer_client(&state, transfer_id, connection_id, cx)
         };
 
         if !matches!(config.format, TransferFormat::Bson) && client.is_none() {
@@ -253,6 +253,7 @@ impl AppCommands {
                     Err(e) => {
                         let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                             error: e.to_string(),
+                            transient: e.is_transient(),
                         });
                         return;
                     }
@@ -277,6 +278,7 @@ impl AppCommands {
                     Err(error) => {
                         let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                             error: error.to_string(),
+                            transient: crate::error::Error::from(error).is_transient(),
                         });
                         return;
                     }
@@ -285,6 +287,7 @@ impl AppCommands {
                 if let Err(error) = std::fs::create_dir(&staging_path) {
                     let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                         error: error.to_string(),
+                        transient: crate::error::Error::from(error).is_transient(),
                     });
                     return;
                 }
@@ -432,6 +435,7 @@ impl AppCommands {
                 {
                     let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                         error: format!("Could not finalize database export: {error}"),
+                        transient: false,
                     });
                     return;
                 }
@@ -530,8 +534,9 @@ impl AppCommands {
                                     state.set_status_message(Some(StatusMessage::info(message)));
                                     cx.emit(AppEvent::TransferCancelled { transfer_id });
                                 }
-                                TransferProgressMessage::Failed { error } => {
+                                TransferProgressMessage::Failed { error, transient } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.failure_transient = transient;
                                         tab.runtime.is_running = false;
                                         tab.runtime.error_message = Some(error.clone());
                                     }
@@ -600,6 +605,7 @@ impl AppCommands {
                     Err(error) => {
                         let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                             error: error.to_string(),
+                            transient: crate::error::Error::from(error).is_transient(),
                         });
                         return;
                     }
@@ -664,6 +670,7 @@ impl AppCommands {
                         ) {
                             let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                                 error: format!("Could not finalize BSON export: {error}"),
+                                transient: false,
                             });
                             return;
                         }
@@ -680,6 +687,7 @@ impl AppCommands {
                     Err(e) => {
                         let _ = tx.unbounded_send(TransferProgressMessage::Failed {
                             error: e.to_string(),
+                            transient: e.is_transient(),
                         });
                     }
                 }
@@ -792,8 +800,9 @@ impl AppCommands {
                                         );
                                     }
                                 }
-                                TransferProgressMessage::Failed { error } => {
+                                TransferProgressMessage::Failed { error, transient } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.failure_transient = transient;
                                         tab.runtime.is_running = false;
                                         tab.runtime.cancellation_token = None;
                                         tab.runtime.error_message = Some(error.clone());
@@ -959,6 +968,7 @@ impl AppCommands {
                         let _ = tx.unbounded_send(CollectionProgressMessage::Failed {
                             error: e.to_string(),
                             processed: 0,
+                            transient: e.is_transient(),
                         });
                     }
                 }
@@ -1004,8 +1014,13 @@ impl AppCommands {
                                     ))));
                                     cx.emit(AppEvent::TransferCompleted { transfer_id, count });
                                 }
-                                CollectionProgressMessage::Failed { error, processed } => {
+                                CollectionProgressMessage::Failed {
+                                    error,
+                                    processed,
+                                    transient,
+                                } => {
                                     if let Some(tab) = state.transfer_tab_mut(transfer_id) {
+                                        tab.runtime.failure_transient = transient;
                                         tab.runtime.is_running = false;
                                         tab.runtime.progress_count =
                                             tab.runtime.progress_count.max(processed);

@@ -395,7 +395,21 @@ impl TransferView {
                     .border_t_1()
                     .border_color(islands::panel_border(&appearance, cx))
                     .child(div().flex_1().min_w(px(0.0)).child(status))
-                    .child(action_button),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(spacing::sm())
+                            .child(crate::views::tasks::save_task_controls(
+                                self.state.clone(),
+                                crate::state::TabKey::Transfer(crate::state::TransferTabKey {
+                                    id: transfer_id,
+                                    connection_id: None,
+                                }),
+                                cx,
+                            ))
+                            .child(action_button),
+                    ),
             )
             .into_any_element()
     }

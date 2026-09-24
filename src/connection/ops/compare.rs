@@ -26,7 +26,7 @@ const MAX_ROW_BYTES: usize = 64 * 1024 * 1024;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const SESSION_REFRESH: Duration = Duration::from_secs(5 * 60);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Side {
     Left,
     Right,
@@ -76,7 +76,8 @@ impl DiffRow {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CompareCounts {
     pub left_read: u64,
     pub right_read: u64,

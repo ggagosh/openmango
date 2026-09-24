@@ -151,6 +151,9 @@ impl AppState {
             TabKey::AgentActivity => {
                 self.current_view = View::AgentActivity;
             }
+            TabKey::Tasks => {
+                self.current_view = View::Tasks;
+            }
             TabKey::Connections => {
                 self.current_view = View::Connections;
             }
@@ -564,7 +567,7 @@ impl AppState {
         self.push_transfer_tab(transfer_state, Some(source_connection_id), cx);
     }
 
-    fn push_transfer_tab(
+    pub(in crate::state::app_state) fn push_transfer_tab(
         &mut self,
         transfer_state: TransferTabState,
         connection_id: Option<Uuid>,
@@ -669,6 +672,25 @@ impl AppState {
             },
             _ => None,
         }
+    }
+
+    /// Open Tasks as a singleton workspace tab.
+    pub fn open_tasks_tab(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) = self.tabs.open.iter().position(|tab| matches!(tab, TabKey::Tasks)) {
+            if self.active_index() != Some(index) {
+                self.set_active_index(index);
+                self.current_view = View::Tasks;
+                cx.emit(AppEvent::ViewChanged);
+                cx.notify();
+            }
+            return;
+        }
+
+        self.tabs.open.push(TabKey::Tasks);
+        self.set_active_index(self.tabs.open.len() - 1);
+        self.current_view = View::Tasks;
+        cx.emit(AppEvent::ViewChanged);
+        cx.notify();
     }
 
     pub fn open_agent_activity_tab(&mut self, cx: &mut Context<Self>) {
@@ -1009,6 +1031,7 @@ impl AppState {
             }
             TabKey::Relations(_)
             | TabKey::AgentActivity
+            | TabKey::Tasks
             | TabKey::Connections
             | TabKey::Settings
             | TabKey::Changelog => {
@@ -1163,6 +1186,7 @@ impl AppState {
                 TabKey::Transfer(_)
                 | TabKey::Compare(_)
                 | TabKey::AgentActivity
+                | TabKey::Tasks
                 | TabKey::Connections
                 | TabKey::Settings
                 | TabKey::Changelog => false,
@@ -1349,6 +1373,7 @@ fn tab_kind_label(tab: &TabKey) -> &'static str {
         TabKey::References(_) => "references",
         TabKey::Relations(_) => "relations",
         TabKey::AgentActivity => "agent_activity",
+        TabKey::Tasks => "tasks",
         TabKey::Connections => "connections",
         TabKey::Settings => "settings",
         TabKey::Changelog => "changelog",

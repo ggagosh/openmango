@@ -85,6 +85,7 @@ pub(crate) struct TabsHost<'a> {
     pub(crate) references_view: Option<&'a Entity<ReferencesView>>,
     pub(crate) relations_view: Option<&'a Entity<RelationsView>>,
     pub(crate) agent_activity_view: Option<&'a Entity<AgentActivityView>>,
+    pub(crate) tasks_view: Option<&'a Entity<crate::views::TasksView>>,
     pub(crate) connection_manager_view: Option<&'a Entity<ConnectionManagerView>>,
     pub(crate) settings_view: Option<&'a Entity<SettingsView>>,
     pub(crate) changelog_view: Option<&'a Entity<ChangelogView>>,
@@ -271,6 +272,9 @@ impl Render for OpenTabsBar {
                         (key.database.clone(), crate::assets::AppIcon::Workflow.into(), false)
                     }
                     TabKey::AgentActivity => ("Agent Activity".into(), IconName::Bot.into(), false),
+                    TabKey::Tasks => {
+                        ("Tasks".into(), crate::assets::AppIcon::ListChecks.into(), false)
+                    }
                     TabKey::Connections => {
                         ("Connections".into(), IconName::Settings2.into(), false)
                     }
@@ -651,6 +655,10 @@ pub(crate) fn render_tabs_host(host: TabsHost<'_>, cx: &App) -> AnyElement {
             .unwrap_or_else(|| div().into_any_element()),
         View::AgentActivity => host
             .agent_activity_view
+            .map(|view| view.clone().into_any_element())
+            .unwrap_or_else(|| div().into_any_element()),
+        View::Tasks => host
+            .tasks_view
             .map(|view| view.clone().into_any_element())
             .unwrap_or_else(|| div().into_any_element()),
         View::Connections => host
