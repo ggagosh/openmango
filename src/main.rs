@@ -35,6 +35,11 @@ fn main() {
         return;
     }
     openmango::helpers::support::init_logging();
+    // Started by the system scheduler: runs what is due while OpenMango is closed, no window.
+    if std::env::args_os().any(|argument| argument == "--run-due-tasks") {
+        openmango::app::background::run_due_tasks();
+        return;
+    }
 
     gpui_kit::application().with_assets(Assets).run(|cx: &mut gpui_kit::App| {
         // Initialize the toolkit before applying the app keymap and theme.

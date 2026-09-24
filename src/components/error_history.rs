@@ -40,6 +40,7 @@ pub fn error_notification(entry: &ErrorEntry, state: Entity<AppState>) -> Notifi
         let label = match &action {
             Some(ErrorAction::Reconnect(_)) => "Reconnect",
             Some(ErrorAction::ReloadDocuments(_)) => "Reload",
+            Some(ErrorAction::OpenTask(_)) => "Open task",
             None => "Copy",
         };
         let (state, action, copy_text) = (state.clone(), action.clone(), report.copy_text());
@@ -61,6 +62,9 @@ pub fn error_notification(entry: &ErrorEntry, state: Entity<AppState>) -> Notifi
                             cx,
                             move |_, cx| AppCommands::load_documents_for_session(state, key, cx),
                         );
+                    }
+                    Some(ErrorAction::OpenTask(task_id)) => {
+                        state.update(cx, |app, cx| app.open_task(task_id, cx))
                     }
                     None => cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone())),
                 }

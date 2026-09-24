@@ -106,7 +106,7 @@ impl ErrorReport {
             Error::Json(_) | Error::Csv(_) => {
                 Self::new(title, sentence(&error.to_string())).kind(ErrorKind::Validation)
             }
-            Error::Parse(text) => {
+            Error::Parse(text) | Error::Connect { message: text, .. } => {
                 let mut report = Self::from_message(title, text);
                 report.kind = ErrorKind::Validation;
                 report

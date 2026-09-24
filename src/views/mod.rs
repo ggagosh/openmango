@@ -11,6 +11,7 @@ pub mod references;
 pub mod relations;
 pub mod results;
 pub mod settings;
+pub mod task_schedule;
 pub mod tasks;
 pub mod transfer;
 

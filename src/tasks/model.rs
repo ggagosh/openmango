@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::schedule::Schedule;
 use crate::connection::ops::compare::{CompareCounts, Side};
 use crate::connection::ops::compare_database::SyncMode;
 use crate::connection::ops::compare_sync::SyncSummary;
@@ -21,8 +22,44 @@ pub struct Task {
     pub spec: TaskSpec,
     #[serde(default)]
     pub safety: super::safety::SafetyLimit,
+    /// When runs start by themselves.
+    #[serde(default)]
+    pub schedule: Schedule,
+    /// The schedule is kept, but no run starts by itself.
+    #[serde(default)]
+    pub paused: bool,
+    /// Signing in failed, so the schedule paused itself until a connection is edited or it is
+    /// resumed. Trying a wrong password again can lock the account.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused_by_sign_in: bool,
+    /// A scheduled run that succeeds says so too, not only one that fails.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notify_success: bool,
+    /// The background runner starts its scheduled runs while OpenMango is closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_when_closed: bool,
+    /// The due time handled last, or when the schedule was set or resumed. The next run is the
+    /// schedule's first time after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_from: Option<DateTime<Utc>>,
+    /// For a task that writes: what was approved when it got its schedule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<Approval>,
+    /// A scheduled export keeps only this many of its newest files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_files: Option<u32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// What was approved when a task that writes got its schedule. Scheduled runs stop when a
+/// connection no longer matches it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Approval {
+    /// Each connection the task uses, with its identity hash at the time.
+    pub connections: Vec<(Uuid, String)>,
+    /// Scheduled runs may write to a Production or protected connection.
+    pub protected_writes: bool,
 }
 
 impl Task {
@@ -34,6 +71,14 @@ impl Task {
             name,
             spec,
             safety: Default::default(),
+            schedule: Schedule::Manual,
+            paused: false,
+            paused_by_sign_in: false,
+            notify_success: false,
+            run_when_closed: false,
+            schedule_from: None,
+            approval: None,
+            keep_files: None,
             created_at: now,
             updated_at: now,
         }
@@ -211,6 +256,11 @@ pub enum RunTrigger {
     Preview,
     /// Reverts the task's last sync run.
     Undo,
+    /// Started by the schedule.
+    Schedule,
+    /// Started by the schedule for a time that passed while OpenMango was closed or the computer
+    /// slept.
+    CatchUp,
 }
 
 impl RunTrigger {
@@ -219,7 +269,14 @@ impl RunTrigger {
             Self::Manual => "Run now",
             Self::Preview => "Preview",
             Self::Undo => "Undo",
+            Self::Schedule => "Schedule",
+            Self::CatchUp => "Catch-up",
         }
+    }
+
+    /// A run that did what the task does, as opposed to previewing or undoing it.
+    pub fn is_run(self) -> bool {
+        matches!(self, Self::Manual | Self::Schedule | Self::CatchUp)
     }
 }
 
@@ -234,6 +291,8 @@ pub enum RunStatus {
     Cancelled,
     /// Still marked running when the app started: it was cut short by a crash or a forced quit.
     Interrupted,
+    /// A scheduled run that didn't start; its log says why.
+    Skipped,
 }
 
 impl RunStatus {
@@ -245,6 +304,7 @@ impl RunStatus {
             Self::Failed => "Failed",
             Self::Cancelled => "Cancelled",
             Self::Interrupted => "Interrupted",
+            Self::Skipped => "Skipped",
         }
     }
 }
@@ -296,6 +356,19 @@ pub struct Run {
     pub stops: Vec<String>,
     pub log: Vec<LogLine>,
     pub log_dropped: u64,
+    /// What kind of failure ended the run, where that decides what happens next.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<FailureKind>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureKind {
+    /// It can pass by itself: a server that couldn't be reached or didn't answer, after retrying
+    /// ran out. One such failure doesn't need attention; three in a row do.
+    Temporary,
+    /// Signing in to a connection failed.
+    SignIn,
 }
 
 impl Run {
@@ -312,6 +385,7 @@ impl Run {
             stops: Vec::new(),
             log: Vec::new(),
             log_dropped: 0,
+            failure: None,
         }
     }
 
@@ -329,6 +403,20 @@ impl Run {
         }
         self.collections.push(CollectionRun { name: name.to_string(), ..Default::default() });
         self.collections.last_mut().expect("just pushed")
+    }
+
+    /// A scheduled run that didn't start, recorded with why.
+    pub fn skipped(task_id: Uuid, reason: impl Into<String>) -> Self {
+        let mut run = Self::start(task_id, RunTrigger::Schedule);
+        run.log(LogLevel::Info, reason);
+        run.status = RunStatus::Skipped;
+        run.finished_at = Some(run.started_at);
+        run
+    }
+
+    /// A run that ended without doing all it should have.
+    pub fn failed(&self) -> bool {
+        matches!(self.status, RunStatus::Failed | RunStatus::PartlyDone | RunStatus::Interrupted)
     }
 
     /// Ends the run. The status follows from what happened unless it was cancelled.
