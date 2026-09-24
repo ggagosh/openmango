@@ -402,8 +402,10 @@ mod tests {
     #[test]
     fn scheduled_exports_are_named_by_time_and_only_their_oldest_are_pruned() {
         let when = NaiveDateTime::parse_from_str("2026-09-24 02:00", "%Y-%m-%d %H:%M").unwrap();
-        assert_eq!(stamped_path("/data/orders.jsonl", when), "/data/orders-2026-09-24T0200.jsonl");
-        assert_eq!(stamped_path("/data/dump", when), "/data/dump-2026-09-24T0200");
+        // Joined the way the system joins paths: with `\` on Windows.
+        let data = |name: &str| std::path::Path::new("/data").join(name).display().to_string();
+        assert_eq!(stamped_path("/data/orders.jsonl", when), data("orders-2026-09-24T0200.jsonl"));
+        assert_eq!(stamped_path("/data/dump", when), data("dump-2026-09-24T0200"));
         assert_eq!(stamped_path("/data/orders-${date}.csv", when), "/data/orders-${date}.csv");
 
         let directory = tempfile::tempdir().unwrap();
