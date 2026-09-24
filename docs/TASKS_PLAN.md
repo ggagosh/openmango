@@ -200,6 +200,9 @@ the background runner (PR 4), and section 7.4.
 - **Verified:** a `--run-due-tasks` run with no window, from a dev build signed with the
   development identity, read a Sync task's connection passwords from the keychain without a
   prompt, ran the task and recorded it (2026-09-24).
+- **Found on a signed build (2026-09-24):** `SMAppService` reports "not found" for an agent that
+  is in the bundle but has never been registered, so the status reads as not registered whenever
+  `Contents/Library/LaunchAgents` has the file; only a bundle without it can't have one.
 - **Not verified yet:** registering the launch agent, the Login Items flow and a launchd-started
   run, which need the app built as a bundle.
 

@@ -106,7 +106,11 @@ mod mac {
         match status {
             1 => RunnerStatus::Enabled,
             2 => RunnerStatus::NeedsApproval,
-            3 => RunnerStatus::Unavailable("The app is missing its launch agent."),
+            // macOS also says "not found" for an agent that has never been registered, so only
+            // a bundle without the file really lacks one.
+            3 if !super::agent_in_bundle(&std::env::current_exe().unwrap_or_default(), PLIST) => {
+                RunnerStatus::Unavailable("The app is missing its launch agent.")
+            }
             _ => RunnerStatus::NotRegistered,
         }
     }
@@ -139,6 +143,15 @@ mod mac {
             let _: () = unsafe { msg_send![class, openSystemSettingsLoginItems] };
         }
     }
+}
+
+/// Whether the app bundle the program `exe` runs from has the launch agent `plist`, in
+/// `Contents/Library/LaunchAgents` next to `Contents/MacOS`.
+#[cfg(any(target_os = "macos", test))]
+fn agent_in_bundle(exe: &std::path::Path, plist: &str) -> bool {
+    exe.parent()
+        .and_then(std::path::Path::parent)
+        .is_some_and(|contents| contents.join("Library/LaunchAgents").join(plist).is_file())
 }
 
 #[cfg(windows)]
@@ -505,6 +518,19 @@ mod tests {
             .map(std::path::PathBuf::from)
             .find(|path| path.exists())
             .ok_or(())
+    }
+
+    #[test]
+    fn the_launch_agent_is_found_in_the_bundle_it_runs_from() {
+        let app = tempfile::tempdir().unwrap();
+        let contents = app.path().join("OpenMango.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        let exe = contents.join("MacOS/OpenMango");
+        assert!(!agent_in_bundle(&exe, "agent.plist"));
+        std::fs::create_dir_all(contents.join("Library/LaunchAgents")).unwrap();
+        std::fs::write(contents.join("Library/LaunchAgents/agent.plist"), "").unwrap();
+        assert!(agent_in_bundle(&exe, "agent.plist"));
+        assert!(!agent_in_bundle(std::path::Path::new("OpenMango"), "agent.plist"));
     }
 
     #[test]
