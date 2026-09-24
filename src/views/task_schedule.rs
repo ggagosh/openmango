@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::components::{Button, cancel_button, open_confirm_dialog};
 use crate::connection::ops::compare_database::SyncMode;
-use crate::helpers::background_runner::RunnerStatus;
+use crate::helpers::background_runner::{self, RunnerStatus};
 use crate::state::app_state::ScheduleSettings;
 use crate::state::{AppState, StatusMessage, TransferMode};
 use crate::tasks::model::{Task, TaskSpec};
@@ -539,9 +539,11 @@ impl ScheduleEditor {
             RunnerStatus::Unavailable(why) => (false, why.to_string()),
             _ => (
                 true,
-                "OpenMango looks for due tasks about every 15 minutes, so a run can start up to \
-                 15 minutes late. It's listed in System Settings under Login Items."
-                    .to_string(),
+                format!(
+                    "OpenMango looks for due tasks about every 15 minutes, so a run can start up \
+                     to 15 minutes late. {}",
+                    background_runner::LISTED_IN
+                ),
             ),
         };
         div()

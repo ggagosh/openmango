@@ -200,6 +200,32 @@ the background runner (PR 4), and section 7.4.
 - **Not verified yet:** registering the launch agent, the Login Items flow and a launchd-started
   run, which need the app built as a bundle.
 
+**PR 5, Windows — built, checked on the Windows CI machines, not yet on a signed-in PC.**
+
+- **The entry** is the Task Scheduler task `OpenMango\Run due tasks`, created with the system's
+  `schtasks.exe /Create /XML` from a definition in `src/helpers/background_runner.rs`, so no new
+  crate. Its settings are section 5.3's: every 15 minutes, `StartWhenAvailable`, the battery
+  settings off, `IgnoreNew` for a start while one still runs, and `ExecutionTimeLimit` of 25
+  hours, one above a run's own limit. Its start boundary is one minute past a quarter hour, so a
+  task due on the quarter hour runs a minute later instead of up to 15.
+- **It runs as the signed-in user, only while they're signed in** (`InteractiveToken`). That is
+  what lets it read the passwords Credential Manager keeps for them, like the macOS agent, which
+  also runs only in the user's session. It needs no administrator rights and stores no password.
+- **Status** comes from `schtasks /Query /XML`: missing is not registered, `<Enabled>false` is
+  switched off, which needs attention with Open Task Scheduler. The XML is read for its markup,
+  not the localized text `schtasks` prints otherwise.
+- **The installed program is a Windows GUI program**, so a start shows no window. Development
+  builds are console programs and would flash one every 15 minutes, and a running runner would
+  stop cargo from replacing the program, so they don't add the task; `cargo run --
+  --run-due-tasks` tries the runner, as on macOS.
+- **Uninstalling** deletes the task (`[UninstallRun]` in `resources/windows/openmango.iss`).
+- **Checked:** the module compiles and passes clippy for Windows. On the Windows CI machines, a
+  unit test adds a throwaway task with the real `schtasks`, reads it back as on, disables it,
+  reads it as switched off, and deletes it; the package check adds the task and makes sure the
+  uninstaller removes it.
+- **Not verified yet:** Task Scheduler actually starting the installed program, and that run
+  reading the passwords, which need a Windows PC with OpenMango installed and a signed-in user.
+
 ## 1. What the evidence says
 
 **DBeaver**, the closest comparable desktop database tool:
@@ -491,7 +517,7 @@ Per platform:
 | Platform | Entry | Settings that matter |
 |---|---|---|
 | macOS | A launch agent bundled in the app and registered with `SMAppService` | Starts every 900 seconds. The app reads its status to warn when it's switched off in Login Items |
-| Windows | A Task Scheduler task, through the `planif` crate or `schtasks` | Repeats every 15 minutes. `StartWhenAvailable` on. `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` off. `ExecutionTimeLimit`, which stops a task after 72 hours by default, set just above OpenMango's own run time limit (section 7.2) |
+| Windows | A Task Scheduler task, through `schtasks` | Repeats every 15 minutes. `StartWhenAvailable` on. `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` off. `ExecutionTimeLimit`, which stops a task after 72 hours by default, set just above OpenMango's own run time limit (section 7.2) |
 | Linux | A systemd user timer and service | `OnCalendar=*:0/15`, `Persistent=true`. Without a systemd user session, the option is shown as unavailable with the reason |
 
 **Passwords without a window.** The run reads them through the same keychain calls as the app:

@@ -494,7 +494,7 @@ impl AppRoot {
         Self::open_ai_memory(&state, cx);
         Self::open_task_runs(&state, cx);
         // Registers the background runner if a task needs it and it went missing, and notes
-        // whether it's switched off in Login Items.
+        // whether it's switched off in Login Items or Task Scheduler.
         state.update(cx, |state, _| state.sync_background_runner());
         Self::start_history(state.clone(), cx);
         let mcp_enabled = state.read(cx).settings.mcp.enabled;

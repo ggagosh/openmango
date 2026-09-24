@@ -81,8 +81,8 @@ pub enum Fix {
     RunAnyway,
     /// Show the failed run's details.
     ShowRun(Uuid),
-    /// Open System Settings at Login Items, where the background runner is switched on.
-    LoginItems,
+    /// Open where the background runner is switched on: Login Items or Task Scheduler.
+    RunnerSettings,
 }
 
 /// Runs in a row that fail for a reason that can pass before a task needs attention anyway.
@@ -310,12 +310,12 @@ impl AppState {
         if task.run_when_closed && self.tasks.runner != RunnerStatus::Enabled {
             let detail = match self.tasks.runner {
                 RunnerStatus::Unavailable(why) => why.to_string(),
-                _ => "Switch OpenMango on in System Settings, under Login Items.".into(),
+                _ => background_runner::SWITCH_ON.into(),
             };
             return Some(Attention {
                 reason: "It can't run while OpenMango is closed.".into(),
                 detail,
-                fix: Fix::LoginItems,
+                fix: Fix::RunnerSettings,
             });
         }
         if task.paused {
