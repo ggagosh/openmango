@@ -64,6 +64,53 @@ pub(crate) fn connection_secret_bundle_key(secret_id: Uuid) -> String {
     format!("{SECRET_BUNDLE_PREFIX}{secret_id}")
 }
 
+impl AppState {
+    /// For the background runner: reads the saved passwords of the connections `ids` into the
+    /// connection list, changing nothing in the keychain. The app loads them in
+    /// `AppRoot::hydrate_connection_secrets`, which also moves old entries to the current format.
+    /// A connection whose passwords can't be read goes without them, so its run fails signing
+    /// in and says so.
+    pub(crate) fn read_connection_secrets(
+        state: gpui_kit::Entity<Self>,
+        ids: &[Uuid],
+        cx: &mut App,
+    ) -> Task<()> {
+        let reads: Vec<_> = state
+            .read(cx)
+            .connections
+            .iter()
+            .filter(|connection| ids.contains(&connection.id))
+            .filter_map(|connection| {
+                let key = connection_secret_bundle_key(connection.secret_id?);
+                let read = KeyStore::read_conn(cx, connection.id, &key);
+                Some((connection.id, connection.name.clone(), read))
+            })
+            .collect();
+        cx.spawn(async move |cx| {
+            for (id, name, read) in reads {
+                let secrets = match read.await {
+                    Ok(Some(payload)) => {
+                        serde_json::from_str::<ConnectionSecrets>(&payload).map_err(Into::into)
+                    }
+                    Ok(None) => Err(anyhow::anyhow!("they aren't in the keychain")),
+                    Err(error) => Err(error),
+                };
+                match secrets {
+                    Ok(secrets) => cx.update(|cx| {
+                        state.update(cx, |app, _| {
+                            let connection = app.connections.iter_mut().find(|c| c.id == id);
+                            if let Some(connection) = connection {
+                                secrets.apply_to(connection);
+                            }
+                        })
+                    }),
+                    Err(error) => log::warn!("Couldn't read the passwords of {name}: {error:#}"),
+                }
+            }
+        })
+    }
+}
+
 fn write_conn_secret_bundle(cx: &App, connection: &SavedConnection) -> Task<Result<()>> {
     let Some(secret_id) = connection.secret_id else {
         return cx.spawn(async move |_cx| Err(anyhow::anyhow!("missing connection secret id")));

@@ -11,13 +11,17 @@ use gpui_kit::component::calendar::{Calendar, CalendarState, Date, Matcher};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::{Dialog, DialogFooter};
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
-use gpui_kit::component::{ActiveTheme as _, Selectable as _, Sizable as _, Size, WindowExt as _};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, Size, WindowExt as _,
+};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::{Button, cancel_button, open_confirm_dialog};
 use crate::connection::ops::compare_database::SyncMode;
+use crate::helpers::background_runner::{self, RunnerStatus};
+use crate::state::app_state::ScheduleSettings;
 use crate::state::{AppState, StatusMessage, TransferMode};
 use crate::tasks::model::{Task, TaskSpec};
 use crate::tasks::safety::SafetyLimit;
@@ -77,6 +81,9 @@ pub struct ScheduleEditor {
     weekdays_only: bool,
     keep_files: bool,
     notify_success: bool,
+    run_when_closed: bool,
+    /// The system entry that starts tasks while OpenMango is closed, as last seen.
+    runner: RunnerStatus,
     protected_writes: bool,
     /// The Production or protected connection the task writes to, by name.
     protected_target: Option<String>,
@@ -148,6 +155,9 @@ impl ScheduleEditor {
             weekdays_only,
             keep_files: task.keep_files.is_some(),
             notify_success: task.notify_success,
+            run_when_closed: task.run_when_closed,
+            // Asked here, since the app only asks at launch when a task uses it.
+            runner: crate::helpers::background_runner::status(),
             protected_writes: task
                 .approval
                 .as_ref()
@@ -255,20 +265,22 @@ impl ScheduleEditor {
         let keep_files = (self.keep_files && self.stamped_export().is_some()).then_some(KEEP_FILES);
         let protected_writes = self.protected_writes;
         let notify_success = self.notify_success;
+        let run_when_closed = self.run_when_closed;
         let apply = {
             let (state, id, name) = (self.state.clone(), self.task.id, self.task.name.clone());
             move |window: &mut Window, cx: &mut App| -> Result<(), String> {
                 let next = schedule.next_after(&Local::now());
                 let label = schedule.label();
                 let result = state.update(cx, |app, cx| {
-                    let result = app.set_task_schedule(
-                        id,
+                    let settings = ScheduleSettings {
                         schedule,
                         safety,
                         keep_files,
                         protected_writes,
                         notify_success,
-                    );
+                        run_when_closed,
+                    };
+                    let result = app.set_task_schedule(id, settings);
                     if result.is_ok() {
                         let message = match next {
                             Some(next) => format!(
@@ -514,6 +526,44 @@ impl ScheduleEditor {
             )
     }
 
+    /// "Run even when OpenMango is closed", or why this OpenMango can't.
+    fn render_closed(&self, cx: &mut Context<Self>) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let (available, note) = match self.runner {
+            // So the runner can be tried in development: nothing starts it by itself there.
+            RunnerStatus::Unavailable(_) if cfg!(debug_assertions) => (
+                true,
+                "Development build: nothing starts the runner by itself. Run `cargo run -- \
+                 --run-due-tasks` once the task is due, with OpenMango closed."
+                    .to_string(),
+            ),
+            RunnerStatus::Unavailable(why) => (false, why.to_string()),
+            _ => (
+                true,
+                format!(
+                    "OpenMango looks for due tasks about every 15 minutes, so a run can start up \
+                     to 15 minutes late. {}",
+                    background_runner::LISTED_IN
+                ),
+            ),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(spacing::xs())
+            .child(
+                Checkbox::new("schedule-run-when-closed")
+                    .label("Run even when OpenMango is closed")
+                    .checked(available && self.run_when_closed)
+                    .disabled(!available)
+                    .on_click(cx.listener(|editor, checked: &bool, _, cx| {
+                        editor.run_when_closed = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(div().pl(px(24.0)).text_xs().text_color(muted).child(note))
+    }
+
     fn render_export(&self, path: &str, schedule: &Schedule, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().muted_foreground;
         let example = schedule
@@ -652,15 +702,18 @@ impl Render for ScheduleEditor {
             )
             .child(rule)
             .when_some(schedule.filter(|schedule| !schedule.is_manual()), |editor, schedule| {
-                let editor = editor.child(self.render_next(&schedule, cx)).child(
-                    Checkbox::new("schedule-notify-success")
-                        .label("Also notify when a scheduled run succeeds")
-                        .checked(self.notify_success)
-                        .on_click(cx.listener(|editor, checked: &bool, _, cx| {
-                            editor.notify_success = *checked;
-                            cx.notify();
-                        })),
-                );
+                let editor = editor
+                    .child(self.render_next(&schedule, cx))
+                    .child(
+                        Checkbox::new("schedule-notify-success")
+                            .label("Also notify when a scheduled run succeeds")
+                            .checked(self.notify_success)
+                            .on_click(cx.listener(|editor, checked: &bool, _, cx| {
+                                editor.notify_success = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .when(cfg!(target_os = "macos"), |editor| editor.child(self.render_closed(cx)));
                 match &export {
                     Some(path) => editor.child(self.render_export(path, &schedule, cx)),
                     None => editor,

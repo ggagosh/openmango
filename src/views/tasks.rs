@@ -702,7 +702,10 @@ impl TasksView {
                 next_run(task)
                     .map_or("No run coming up.".into(), |at| format!("Next: {}", run_time(at)))
             };
-            lines(format!("{}, local time", task.schedule.label()).into_any_element(), next)
+            let closed =
+                if task.run_when_closed { " · also while OpenMango is closed" } else { "" };
+            let first = format!("{}, local time{closed}", task.schedule.label());
+            lines(first.into_any_element(), next)
         };
         // The same label and value list the reference peek uses.
         let mut facts = DescriptionList::new()
@@ -765,6 +768,12 @@ impl TasksView {
                         cx.notify();
                     }),
                 ),
+                Fix::RunnerSettings => Button::new("task-fix")
+                    .label(crate::helpers::background_runner::OPEN_SETTINGS)
+                    .on_click(move |_, _, cx| {
+                        crate::helpers::background_runner::open_settings();
+                        state.update(cx, |state, cx| state.refresh_background_runner(cx));
+                    }),
             };
             section = section.child(
                 div()

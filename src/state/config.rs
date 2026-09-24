@@ -56,6 +56,14 @@ impl ConfigManager {
         self.config_dir.join("ai-memory.sqlite3")
     }
 
+    /// Takes the lock that makes this process the one that starts scheduled runs, or `None` when
+    /// another OpenMango process holds it.
+    pub fn take_scheduler_lock(
+        &self,
+    ) -> std::io::Result<Option<crate::tasks::lock::SchedulerLock>> {
+        crate::tasks::lock::SchedulerLock::try_take(&self.config_dir)
+    }
+
     /// Task runs, encrypted: their logs can quote server errors that contain document values.
     pub fn task_runs_path(&self) -> PathBuf {
         self.config_dir.join("task-runs.sqlite3")

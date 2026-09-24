@@ -421,6 +421,9 @@ impl AppCommands {
     ) -> (Uuid, CancellationToken) {
         let mut run = Run::start(task.id, trigger);
         run.log(LogLevel::Info, format!("{}: {}", trigger.label(), task.spec.subject()));
+        if state.read(cx).tasks.background {
+            run.log(LogLevel::Info, "Started while OpenMango was closed.");
+        }
         let run_id = run.id;
         let cancellation = CancellationToken::new();
         // A scheduled run stops retrying when the task's next run is due.
@@ -2138,6 +2141,37 @@ mod tests {
 
     /// Runs real tasks against a disposable MongoDB 8 server, through Run now, its questions,
     /// Preview and Undo.
+    /// A throwaway MongoDB, removed however the test ends. Removing it needs a Tokio runtime, and
+    /// a failing test unwinds outside one, which used to leave the container running.
+    struct TestMongo {
+        runtime: tokio::runtime::Runtime,
+        container: Option<testcontainers::ContainerAsync<testcontainers_modules::mongo::Mongo>>,
+        uri: String,
+    }
+
+    impl TestMongo {
+        fn start(
+            image: testcontainers::ContainerRequest<testcontainers_modules::mongo::Mongo>,
+        ) -> Self {
+            use testcontainers::runners::AsyncRunner as _;
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let (container, uri) = runtime.block_on(async {
+                let container = image.start().await.unwrap();
+                let host = container.get_host().await.unwrap();
+                let port = container.get_host_port_ipv4(27017).await.unwrap();
+                (container, format!("mongodb://{host}:{port}"))
+            });
+            Self { runtime, container: Some(container), uri }
+        }
+    }
+
+    impl Drop for TestMongo {
+        fn drop(&mut self) {
+            let container = self.container.take();
+            self.runtime.block_on(async move { drop(container) });
+        }
+    }
+
     #[gpui_kit::test]
     #[ignore = "starts a MongoDB 8 container: cargo test --lib tasks_run_against_mongodb -- --ignored"]
     fn tasks_run_against_mongodb(cx: &mut gpui_kit::TestAppContext) {
@@ -2162,17 +2196,9 @@ mod tests {
             crate::theme::apply_design_tokens(cx);
         });
         cx.executor().allow_parking();
-        let docker = tokio::runtime::Runtime::new().unwrap();
-        let container = docker
-            .block_on(testcontainers_modules::mongo::Mongo::default().with_tag("8.0").start())
-            .unwrap();
-        let uri = docker.block_on(async {
-            format!(
-                "mongodb://{}:{}",
-                container.get_host().await.unwrap(),
-                container.get_host_port_ipv4(27017).await.unwrap()
-            )
-        });
+        let mongo =
+            TestMongo::start(testcontainers_modules::mongo::Mongo::default().with_tag("8.0"));
+        let uri = mongo.uri.clone();
         let manager = Arc::new(ConnectionManager::new());
         // The client lives on the manager's runtime, like one the app opens.
         let client = manager.runtime_handle().block_on(async {
@@ -2488,7 +2514,14 @@ mod tests {
                 app.connections[0].environment =
                     Some(crate::models::ConnectionEnvironment::Production);
                 app.connections[0].confirm_production_writes = true;
-                app.set_task_schedule(task.id, daily.clone(), safety, keep, true, false).unwrap();
+                let settings = crate::state::app_state::ScheduleSettings {
+                    schedule: daily.clone(),
+                    safety,
+                    keep_files: keep,
+                    protected_writes: true,
+                    ..Default::default()
+                };
+                app.set_task_schedule(task.id, settings).unwrap();
                 app.mark_task_due(task.id, from);
             });
         };
@@ -2557,8 +2590,6 @@ mod tests {
         });
         due(cx, at(8));
         assert_eq!(finished(cx, &export).id, refused.id, "paused, so nothing else ran");
-        // The container stops through Tokio, so it is dropped inside a runtime.
-        docker.block_on(async move { drop(container) });
     }
 
     /// A server error that can pass is retried and the run succeeds; one that can't fails at
@@ -2584,22 +2615,12 @@ mod tests {
             crate::theme::apply_design_tokens(cx);
         });
         cx.executor().allow_parking();
-        let docker = tokio::runtime::Runtime::new().unwrap();
-        let container = docker
-            .block_on(
-                testcontainers_modules::mongo::Mongo::default()
-                    .with_tag("8.0")
-                    .with_cmd(["--setParameter", "enableTestCommands=1"])
-                    .start(),
-            )
-            .unwrap();
-        let uri = docker.block_on(async {
-            format!(
-                "mongodb://{}:{}",
-                container.get_host().await.unwrap(),
-                container.get_host_port_ipv4(27017).await.unwrap()
-            )
-        });
+        let mongo = TestMongo::start(
+            testcontainers_modules::mongo::Mongo::default()
+                .with_tag("8.0")
+                .with_cmd(["--setParameter", "enableTestCommands=1"]),
+        );
+        let uri = mongo.uri.clone();
         let manager = Arc::new(ConnectionManager::new());
         let admin = manager.runtime_handle().block_on(async {
             let client = mongodb::Client::with_uri_str(&uri).await.unwrap();
@@ -2773,6 +2794,5 @@ mod tests {
             "{:?}",
             done.log
         );
-        docker.block_on(async move { drop(container) });
     }
 }

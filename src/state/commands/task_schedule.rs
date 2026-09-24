@@ -46,11 +46,22 @@ impl AppCommands {
         now: DateTime<Utc>,
         cx: &mut App,
     ) -> Option<DateTime<Utc>> {
-        let tasks = state.read(cx).tasks.tasks.clone();
+        // Until the lock is free, the background runner is starting runs; look again later.
+        if !state.update(cx, |app, cx| {
+            cx.notify();
+            app.take_scheduler_lock()
+        }) {
+            return None;
+        }
+        let (tasks, background) = {
+            let app = state.read(cx);
+            (app.tasks.tasks.clone(), app.tasks.background)
+        };
         let mut next: Option<DateTime<Utc>> = None;
         for task in tasks {
             let queued = state.read(cx).tasks.queue.iter().any(|(id, ..)| *id == task.id);
-            if task.paused || task.schedule.is_manual() || queued {
+            let skipped = background && !task.run_when_closed;
+            if task.paused || task.schedule.is_manual() || queued || skipped {
                 continue;
             }
             let from = task.schedule_from.unwrap_or(task.updated_at);
@@ -257,6 +268,160 @@ mod tests {
         assert_eq!(triggers(&state, &second, cx).len(), runs);
     }
 
+    /// While another OpenMango process holds the lock, this one starts nothing. Once the lock is
+    /// free it takes over with what the other process recorded, so no run happens twice.
+    #[gpui_kit::test]
+    fn the_app_waits_for_the_background_runner_and_takes_over_its_record(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let directory = tempfile::tempdir().unwrap();
+        let config = ConfigManager::with_config_dir(directory.path().into());
+        let state = cx.new(|_| {
+            let mut app = AppState::with_config(
+                Arc::new(crate::connection::ConnectionManager::new()),
+                config.clone(),
+            );
+            app.attach_task_runs(RunStore::in_memory().unwrap(), None);
+            app
+        });
+        let task = daily("Nightly", TaskSpec::Compare { config: CompareConfig::default() });
+        state.update(cx, |app, _| app.upsert_task(task.clone()).unwrap());
+
+        // The runner holds the lock and handles the run due on the 21st.
+        let runner = config.take_scheduler_lock().unwrap().expect("nobody holds it yet");
+        let mut handled = task.clone();
+        handled.schedule_from = Some(local(21, 2, 0));
+        config.save_tasks(&[handled]).unwrap();
+        let next = cx.update(|cx| AppCommands::check_schedules(&state, local(21, 2, 5), cx));
+        assert_eq!(next, None, "it looks again later");
+        assert!(triggers(&state, &task, cx).is_empty(), "the app starts nothing");
+
+        // An edit in the app meanwhile keeps the runner's record of what it handled.
+        state.update(cx, |app, _| {
+            let mut renamed = app.task(task.id).unwrap().clone();
+            renamed.name = "Nightly sync".into();
+            app.upsert_task(renamed).unwrap();
+        });
+        assert_eq!(config.load_tasks().unwrap()[0].schedule_from, Some(local(21, 2, 0)));
+
+        // The runner ends. The app takes over, and the 21st doesn't run again.
+        drop(runner);
+        let next = cx.update(|cx| AppCommands::check_schedules(&state, local(21, 2, 10), cx));
+        assert_eq!(next, Some(local(22, 2, 0)));
+        assert!(triggers(&state, &task, cx).is_empty());
+    }
+
+    /// The background runner starts only the tasks that may run while OpenMango is closed, and
+    /// what it saves never drops what the app saved meanwhile.
+    #[gpui_kit::test]
+    fn the_background_runner_runs_only_its_tasks_and_keeps_the_apps_edits(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let directory = tempfile::tempdir().unwrap();
+        let config = ConfigManager::with_config_dir(directory.path().into());
+        let compare = || TaskSpec::Compare { config: CompareConfig::default() };
+        let mut closed = daily("Closed", compare());
+        closed.run_when_closed = true;
+        let open_only = daily("Open only", compare());
+        config.save_tasks(&[closed.clone(), open_only.clone()]).unwrap();
+        assert!(crate::app::background::due_while_closed(&closed, local(21, 2, 0)));
+        assert!(!crate::app::background::due_while_closed(&open_only, local(21, 2, 0)));
+
+        let state = cx.new(|_| {
+            let mut app = AppState::with_config(
+                Arc::new(crate::connection::ConnectionManager::new()),
+                config.clone(),
+            );
+            app.tasks.background = true;
+            app.attach_task_runs(RunStore::in_memory().unwrap(), None);
+            app
+        });
+        cx.update(|cx| AppCommands::check_schedules(&state, local(21, 2, 0), cx));
+        cx.run_until_parked();
+        assert_eq!(triggers(&state, &closed, cx), [(RunTrigger::Schedule, RunStatus::Failed)]);
+        assert!(triggers(&state, &open_only, cx).is_empty());
+        let log = state.read_with(cx, |app, _| app.task_runs(closed.id)[0].log.clone());
+        assert!(log.iter().any(|line| line.message == "Started while OpenMango was closed."));
+
+        // The app adds a task while the runner works; the runner's next save keeps it.
+        let added = daily("Added in the app", compare());
+        let mut saved = config.load_tasks().unwrap();
+        saved.push(added.clone());
+        config.save_tasks(&saved).unwrap();
+        state.update(cx, |app, _| app.mark_task_due(closed.id, local(22, 2, 0)));
+        let saved = config.load_tasks().unwrap();
+        assert!(saved.iter().any(|task| task.id == added.id), "the app's task stays");
+        let record = saved.iter().find(|task| task.id == closed.id).unwrap();
+        assert_eq!(record.schedule_from, Some(local(22, 2, 0)));
+    }
+
+    #[gpui_kit::test]
+    fn scheduled_runs_post_system_notifications_that_open_the_task(cx: &mut TestAppContext) {
+        use crate::state::TaskNotice;
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_app_identity("com.openmango.app", "OpenMango");
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let source = SavedConnection::new("Source".into(), "mongodb://localhost:1".into());
+        let state = cx.new(|_| {
+            let mut app = AppState::with_config(
+                Arc::new(crate::connection::ConnectionManager::new()),
+                ConfigManager::with_config_dir(directory.path().into()),
+            );
+            app.connections = vec![source.clone()];
+            app.attach_task_runs(RunStore::in_memory().unwrap(), None);
+            app
+        });
+        let mut config = CompareConfig::default();
+        config.sides[0].connection_id = Some(source.id);
+        config.sides[1].connection_id = Some(source.id);
+        let task = daily("Nightly", TaskSpec::Compare { config });
+        let run = |status: RunStatus| {
+            let mut run = Run::start(task.id, RunTrigger::Schedule);
+            run.status = status;
+            run.error = (status == RunStatus::Failed).then(|| "Server unreachable".to_string());
+            run.finished_at = Some(Utc::now());
+            run
+        };
+        cx.update(|cx| AppState::open_tasks_from_notifications(state.clone(), cx));
+        let post = |looking: bool, open_button: bool, cx: &mut TestAppContext| {
+            cx.update(|cx| AppState::post_task_notices(&state, looking, open_button, cx))
+        };
+
+        // Someone looking at OpenMango sees its own notification; nothing is posted or kept.
+        state.update(cx, |app, _| {
+            app.upsert_task(task.clone()).unwrap();
+            app.record_task_run(run(RunStatus::Failed), true);
+        });
+        assert!(!post(true, true, cx));
+        assert!(cx.shown_system_notifications().is_empty());
+
+        // Otherwise the system shows it, one per task, with Open task.
+        state.update(cx, |app, _| app.record_task_run(run(RunStatus::Succeeded), true));
+        assert!(post(false, true, cx));
+        let shown = cx.shown_system_notifications();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].title.as_ref(), "“Nightly” works again");
+        assert_eq!(TaskNotice::task_in(&shown[0].tag), Some(task.id));
+        assert_eq!(shown[0].actions[0].label.as_ref(), "Open task");
+
+        // The background runner's have no button: it has exited by the time someone clicks.
+        state.update(cx, |app, _| app.record_task_run(run(RunStatus::Failed), true));
+        assert!(post(false, false, cx));
+        let shown = cx.shown_system_notifications();
+        assert_eq!(shown[1].title.as_ref(), "“Nightly” failed");
+        assert!(shown[1].actions.is_empty());
+        assert_eq!(cx.delivered_system_notifications().len(), 1, "the newer one replaced it");
+        assert!(!post(false, true, cx), "each is posted once");
+
+        // Clicking one opens the task.
+        cx.simulate_system_notification_response(gpui_kit::SystemNotificationResponse {
+            tag: shown[1].tag.clone(),
+            action_id: None,
+        });
+        assert_eq!(state.read_with(cx, |app, _| app.tasks.focus), Some(task.id));
+    }
+
     #[gpui_kit::test]
     fn an_outage_notifies_once_and_needs_attention_after_three_failed_runs(
         cx: &mut TestAppContext,
@@ -359,6 +524,8 @@ mod tests {
             );
             app.connections = vec![source.clone(), target.clone()];
             app.attach_task_runs(RunStore::in_memory().unwrap(), None);
+            // The app's own schedule, as at startup: it may move a task's record back in time.
+            assert!(app.take_scheduler_lock());
             app
         });
         let mut config = CompareConfig::default();
@@ -376,8 +543,9 @@ mod tests {
         state.update(cx, |app, _| {
             app.upsert_task(sync.clone()).unwrap();
             let schedule = sync.schedule.clone();
-            app.set_task_schedule(sync.id, schedule, Default::default(), None, false, false)
-                .unwrap();
+            let settings =
+                crate::state::app_state::ScheduleSettings { schedule, ..Default::default() };
+            app.set_task_schedule(sync.id, settings).unwrap();
             assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
 
             // The target becomes Production after approval.
