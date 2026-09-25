@@ -100,11 +100,8 @@ impl AppCommands {
                                     runtime_meta,
                                 },
                             );
-                            // A connection attempt uses a snapshot; retain settings edited while it ran.
-                            if let Some(mut latest) = state.connection_by_id(connection_id).cloned()
-                            {
-                                latest.last_connected = saved.last_connected;
-                                state.update_connection(latest, cx);
+                            if let Some(at) = saved.last_connected {
+                                state.set_connection_last_connected(connection_id, at);
                             }
                             if show {
                                 state.select_connection(Some(connection_id), cx);

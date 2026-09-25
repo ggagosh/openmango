@@ -548,6 +548,14 @@ mod tests {
             app.set_task_schedule(sync.id, settings).unwrap();
             assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
 
+            // Connecting records when; the approval still holds.
+            let secret = Some(uuid::Uuid::new_v4());
+            app.connections[1].secret_id = secret;
+            app.approve_task(sync.id, false).unwrap();
+            app.set_connection_last_connected(target.id, Utc::now());
+            assert_eq!(app.connections[1].secret_id, secret);
+            assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
+
             // The target becomes Production after approval.
             app.connections[1].environment = Some(ConnectionEnvironment::Production);
             let task = app.task(sync.id).unwrap();
