@@ -53,6 +53,8 @@ pub fn run_due_tasks() {
     let connections: Vec<uuid::Uuid> =
         due.iter().flat_map(|task| task.spec.connections()).collect();
 
+    #[cfg(target_os = "macos")]
+    crate::helpers::background_runner::stay_out_of_dock();
     gpui_platform::headless().run(move |cx| {
         // The same setup the task tests run under; no window opens.
         gpui_kit::init(cx);
