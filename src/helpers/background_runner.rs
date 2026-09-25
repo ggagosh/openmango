@@ -47,7 +47,7 @@ pub const LISTED_IN: &str = if cfg!(windows) {
 #[cfg(target_os = "linux")]
 pub use linux::{keyring_locked, open_settings, register, status, unregister};
 #[cfg(target_os = "macos")]
-pub use mac::{open_settings, register, status, unregister};
+pub use mac::{open_settings, register, status, stay_out_of_dock, unregister};
 #[cfg(windows)]
 pub use win::{open_settings, register, status, unregister};
 
@@ -133,6 +133,20 @@ mod mac {
         let unregistered: Result<(), Retained<NSError>> =
             unsafe { msg_send![&service, unregisterAndReturnError: _] };
         unregistered.map_err(|error| error.localizedDescription().to_string())
+    }
+
+    /// Keeps the windowless runner out of the Dock. gpui still creates `NSApplication` (it quits
+    /// through it), and the app bundle launches as a normal app, so without this its icon bounces
+    /// in the Dock for the whole run. Call before gpui starts.
+    pub fn stay_out_of_dock() {
+        let Some(class) = AnyClass::get(c"NSApplication") else {
+            return;
+        };
+        let app: Option<Retained<AnyObject>> = unsafe { msg_send![class, sharedApplication] };
+        if let Some(app) = app {
+            // NSApplicationActivationPolicyProhibited: no Dock icon, no windows, never active.
+            let _: bool = unsafe { msg_send![&app, setActivationPolicy: 2isize] };
+        }
     }
 
     /// Opens System Settings at Login Items, where the agent is switched on or off.
