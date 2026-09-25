@@ -151,7 +151,7 @@ fn plural(count: u64, one: &str, many: &str) -> String {
 
 /// What a run did, in a few words: "12,400 documents", "3 different · 1 left only", "Nothing to
 /// write".
-fn run_summary(kind: TaskKind, run: &Run) -> String {
+pub(crate) fn run_summary(kind: TaskKind, run: &Run) -> String {
     if let Some(error) = &run.error
         && run.collections.is_empty()
     {
@@ -363,7 +363,13 @@ pub fn save_task_controls(state: Entity<AppState>, tab: TabKey, cx: &App) -> Any
             .ghost()
             .tooltip("Save these settings as a task you can run again from Tasks")
             .on_click(move |_, window, cx| {
-                crate::app::dialogs::open_save_task_dialog(state.clone(), tab.clone(), window, cx)
+                crate::app::dialogs::open_save_task_dialog(
+                    state.clone(),
+                    tab.clone(),
+                    None,
+                    window,
+                    cx,
+                )
             })
             .into_any_element();
     };
@@ -380,7 +386,7 @@ pub fn save_task_controls(state: Entity<AppState>, tab: TabKey, cx: &App) -> Any
                 .tooltip(format!("Save these settings into “{name}”"))
                 .on_click({
                     let (state, tab) = (state.clone(), tab.clone());
-                    move |_, _, cx| AppCommands::save_linked_task(&state, &tab, cx)
+                    move |_, window, cx| AppCommands::save_linked_task(&state, &tab, window, cx)
                 }),
         )
         .child(
@@ -398,6 +404,7 @@ pub fn save_task_controls(state: Entity<AppState>, tab: TabKey, cx: &App) -> Any
                                 crate::app::dialogs::open_save_task_dialog(
                                     state.clone(),
                                     tab.clone(),
+                                    None,
                                     window,
                                     cx,
                                 )
@@ -633,6 +640,11 @@ impl TasksView {
             );
 
         let selected_run = self.selected_run.and_then(|run| app.task_run(id, run)).cloned();
+        // A comparison or sync says what each run does; a transfer, what it moves.
+        let about = task
+            .spec
+            .sentence(|id| app.connection_name(id))
+            .unwrap_or_else(|| format!("{} · {}", task.spec.kind().label(), task.spec.subject()));
         let body = match selected_run {
             Some(run) => self.render_run(task, &run, cx),
             None => self.render_history(task, cx),
@@ -654,11 +666,7 @@ impl TasksView {
                     .child(
                         div().text_lg().font_weight(FontWeight::SEMIBOLD).child(task.name.clone()),
                     )
-                    .child(div().text_sm().text_color(muted).child(format!(
-                        "{} · {}",
-                        task.spec.kind().label(),
-                        task.spec.subject()
-                    )))
+                    .child(div().text_sm().text_color(muted).child(about))
                     .child(div().pt(spacing::xs()).child(actions))
                     .child(self.render_schedule(task, cx)),
             )
@@ -1264,15 +1272,18 @@ impl Render for TasksView {
 mod tests {
     use std::sync::Arc;
 
-    use gpui_kit::component::Root;
-    use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext, px, size};
+    use gpui_kit::component::{Root, WindowExt as _};
+    use gpui_kit::{
+        AppContext as _, ParentElement as _, Styled as _, TestAppContext, VisualTestContext, px,
+        size,
+    };
     use uuid::Uuid;
 
     use crate::components::ContentArea;
     use crate::connection::ops::compare::Side;
     use crate::connection::ops::compare_database::SyncMode;
     use crate::state::compare::{CompareConfig, CompareScope};
-    use crate::state::{AppState, ConfigManager, TabKey};
+    use crate::state::{AppCommands, AppState, ConfigManager, TabKey};
     use crate::tasks::model::{CollectionRun, LogLevel, Run, RunTrigger, Task, TaskSpec};
 
     fn draw(cx: &mut VisualTestContext) {
@@ -1450,6 +1461,87 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn saving_a_compare_tab_shows_whether_the_task_syncs_and_which_way(cx: &mut TestAppContext) {
+        let (_directory, state) = setup(cx);
+        struct DialogHost;
+        impl gpui_kit::Render for DialogHost {
+            fn render(
+                &mut self,
+                window: &mut gpui_kit::Window,
+                cx: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::div().size_full().children(Root::render_dialog_layer(window, cx))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|_| DialogHost);
+            Root::new(host, window, cx).bordered(false)
+        });
+        cx.simulate_resize(size(px(1200.0), px(900.0)));
+        let id = state.update(cx, |app, cx| {
+            let mut config = CompareConfig { scope: CompareScope::Databases, ..Default::default() };
+            config.sides[0].database = "shop".into();
+            config.sides[1].database = "shop_copy".into();
+            app.open_compare_tab_with(config, cx)
+        });
+        let key = TabKey::Compare(crate::state::compare::CompareTabKey { id, connection_id: None });
+        let click = |element: gpui_kit::ElementId, cx: &mut VisualTestContext| {
+            let snapshots = cx.update(|window, _| gpui_kit::base::test_support::snapshots(window));
+            let node = snapshots
+                .iter()
+                .find(|node| node.path().last() == Some(&element))
+                .unwrap_or_else(|| panic!("{element:?} is drawn"));
+            cx.simulate_click(node.bounds().center(), Default::default());
+            draw(cx);
+        };
+        let open = |into: Option<Uuid>, cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                crate::app::dialogs::open_save_task_dialog(
+                    state.clone(),
+                    key.clone(),
+                    into,
+                    window,
+                    cx,
+                )
+            });
+            draw(cx);
+        };
+
+        // With the sync list closed it starts as a comparison, and can be made a sync.
+        open(None, cx);
+        click("save-sync".into(), cx);
+        click(("save-sync-mode", 2usize).into(), cx);
+        click("save-task".into(), cx);
+        assert!(!cx.update(|window, cx| window.has_active_dialog(cx)), "saving closes it");
+        let task = state.read_with(cx, |app, _| app.tasks.tasks[0].clone());
+        assert_eq!(task.spec.sync_choice(), Some((Side::Right, SyncMode::Mirror)));
+        assert_eq!(
+            task.spec.sentence(|_| None).as_deref(),
+            Some(
+                "Compares shop with shop_copy, then makes shop_copy match it: adds missing \
+                 documents, replaces those that differ, and deletes those only shop_copy has."
+            )
+        );
+
+        // Save task keeps it a sync while the sync list is closed, without asking.
+        cx.update(|window, cx| AppCommands::save_linked_task(&state, &key, window, cx));
+        assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+        let saved = state.read_with(cx, |app, _| app.task(task.id).unwrap().spec.sync_choice());
+        assert_eq!(saved, Some((Side::Right, SyncMode::Mirror)));
+
+        // The sync list picking another way asks first, starting from what the list shows,
+        // and saves into the same task.
+        state.update(cx, |app, _| app.compare_tab_mut(id).unwrap().sync.set_target(Side::Left));
+        cx.update(|window, cx| AppCommands::save_linked_task(&state, &key, window, cx));
+        draw(cx);
+        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        click("save-task".into(), cx);
+        let tasks = state.read_with(cx, |app, _| app.tasks.tasks.clone());
+        assert_eq!(tasks.len(), 1, "saved into the task, not beside it");
+        assert_eq!(tasks[0].spec.sync_choice(), Some((Side::Left, SyncMode::AddMissing)));
+    }
+
+    #[gpui_kit::test]
     fn a_compare_tab_saves_a_sync_task_and_edit_returns_to_its_tab(cx: &mut TestAppContext) {
         use crate::connection::ops::compare_database::{
             CollectionKind, CollectionPair, SideCollection,
@@ -1475,7 +1567,7 @@ mod tests {
             tab.sync.set_mode(SyncMode::Mirror);
             tab.sync.toggle_pair(0);
 
-            let spec = app.compare_task_spec(id).unwrap();
+            let spec = app.compare_task_spec(id, app.compare_save_choice(id)).unwrap();
             let TaskSpec::Sync { target, mode, excluded, .. } = &spec else {
                 panic!("a database tab in sync mode saves a Sync task: {spec:?}");
             };

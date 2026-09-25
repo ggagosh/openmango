@@ -287,6 +287,27 @@ the background runner (PR 4), and section 7.4.
 - **Not verified yet:** the notifications on a real desktop on each system, and a click on a
   macOS notification starting OpenMango.
 
+**After trying it: saving, notifications and approval.** Changes from using the built tasks.
+
+- **Save as task says what it saves.** It used to save a sync while the sync list was open and a
+  comparison otherwise, asking only for a name. For two databases it now offers "Compares only"
+  or "Compares, then syncs", with the side and mode, starting from the sync list or the task the
+  tab belongs to; a sync can be saved with nothing to sync yet. A sentence says what each run
+  does, and the task's details show it too. Save task on a tab linked to a task saves at once
+  unless it would change whether or how the task syncs; then the dialog shows it first.
+- **Saving a task to write another way withdraws its approval:** a different kind, write
+  connection, or sync direction or mode. Before, a scheduled Add missing saved as a Mirror kept
+  running on its old approval.
+- **Every run, if asked:** Schedule…'s notification option now covers each scheduled run's start
+  and end, replacing "notify on success". The end replaces the start's notification. Saved tasks
+  keep their choice (`notify_success` still reads). The background runner posts as runs start
+  and end, not only after all of them.
+- **Approval lost on every connect:** each connect saved the connection through the full save, which
+  gives it a new keychain id, part of the approval fingerprint. Connecting now saves only the
+  time, so approvals and agent grants hold.
+- **Run while closed on Windows and Linux:** the option was still shown only on macOS.
+- **The Dock (macOS):** the background runner no longer bounces OpenMango's Dock icon.
+
 ## 1. What the evidence says
 
 **DBeaver**, the closest comparable desktop database tool:
