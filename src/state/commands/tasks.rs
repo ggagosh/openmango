@@ -75,15 +75,36 @@ impl AppCommands {
         result
     }
 
-    /// Writes the tab's current settings into the task it is linked to.
-    pub fn save_linked_task(state: &Entity<AppState>, tab: &crate::state::TabKey, cx: &mut App) {
+    /// Writes the tab's current settings into the task it is linked to. When a Compare tab
+    /// would turn the task from a comparison into a sync or back, or sync another way, the
+    /// save dialog shows the change first.
+    pub fn save_linked_task(
+        state: &Entity<AppState>,
+        tab: &crate::state::TabKey,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let app = state.read(cx);
         let Some(mut task) = app.tab_task_id(tab).and_then(|id| app.task(id)).cloned() else {
             return;
         };
         let spec = match tab {
             crate::state::TabKey::Transfer(key) => app.transfer_task_spec(key.id),
-            crate::state::TabKey::Compare(key) => app.compare_task_spec(key.id),
+            crate::state::TabKey::Compare(key) => {
+                let choice = app.compare_save_choice(key.id);
+                if choice != task.spec.sync_choice() {
+                    let into = Some(task.id);
+                    crate::app::dialogs::open_save_task_dialog(
+                        state.clone(),
+                        tab.clone(),
+                        into,
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+                app.compare_task_spec(key.id, choice)
+            }
             _ => None,
         };
         let Some(spec) = spec else {

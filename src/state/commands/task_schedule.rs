@@ -423,6 +423,74 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_task_notifying_of_every_run_says_when_each_scheduled_run_starts_and_ends(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let directory = tempfile::tempdir().unwrap();
+        let source = SavedConnection::new("Source".into(), "mongodb://localhost:1".into());
+        let state = cx.new(|_| {
+            let mut app = AppState::with_config(
+                Arc::new(crate::connection::ConnectionManager::new()),
+                ConfigManager::with_config_dir(directory.path().into()),
+            );
+            app.connections = vec![source.clone()];
+            app.attach_task_runs(RunStore::in_memory().unwrap(), None);
+            app
+        });
+        let mut config = CompareConfig::default();
+        config.sides[0].connection_id = Some(source.id);
+        config.sides[1].connection_id = Some(source.id);
+        config.sides[0].database = "shop".into();
+        config.sides[1].database = "shop_copy".into();
+        let mut task = daily("Nightly", TaskSpec::Compare { config });
+        task.notify_every_run = true;
+        state.update(cx, |app, _| app.upsert_task(task.clone()).unwrap());
+        let notices = |cx: &mut TestAppContext| -> Vec<String> {
+            state.update(cx, |app, _| {
+                std::mem::take(&mut app.tasks.notices)
+                    .into_iter()
+                    .map(|notice| format!("{}: {}", notice.title, notice.body))
+                    .collect()
+            })
+        };
+        let record = |run: &Run, cx: &mut TestAppContext| {
+            state.update(cx, |app, _| app.record_task_run(run.clone(), true))
+        };
+        let end = |run: &mut Run, status: RunStatus| {
+            run.status = status;
+            run.error = (status == RunStatus::Failed).then(|| "Server unreachable".to_string());
+            run.finished_at = Some(Utc::now());
+        };
+
+        // Run now says nothing: whoever pressed it is watching.
+        let mut manual = Run::start(task.id, RunTrigger::Manual);
+        record(&manual, cx);
+        end(&mut manual, RunStatus::Succeeded);
+        record(&manual, cx);
+        assert!(notices(cx).is_empty());
+
+        // A scheduled run says it started, then how it ended.
+        let mut run = Run::start(task.id, RunTrigger::Schedule);
+        record(&run, cx);
+        assert_eq!(notices(cx), ["“Nightly” started: On its schedule · shop ↔ shop_copy"]);
+        end(&mut run, RunStatus::Succeeded);
+        record(&run, cx);
+        assert_eq!(notices(cx), ["“Nightly” finished: No differences"]);
+
+        // Every failure says so, not only an outage's first.
+        for _ in 0..2 {
+            let mut run = Run::start(task.id, RunTrigger::CatchUp);
+            record(&run, cx);
+            end(&mut run, RunStatus::Failed);
+            record(&run, cx);
+            let said = notices(cx);
+            assert!(said[0].starts_with("“Nightly” started: Catching up a missed run"));
+            assert_eq!(said[1], "“Nightly” failed: Server unreachable");
+        }
+    }
+
+    #[gpui_kit::test]
     fn an_outage_notifies_once_and_needs_attention_after_three_failed_runs(
         cx: &mut TestAppContext,
     ) {
@@ -555,6 +623,22 @@ mod tests {
             app.set_connection_last_connected(target.id, Utc::now());
             assert_eq!(app.connections[1].secret_id, secret);
             assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
+
+            // Saved to write another way, it needs approving again; a rename doesn't.
+            let mut renamed = app.task(sync.id).unwrap().clone();
+            renamed.name = "Nightly mirror".into();
+            app.upsert_task(renamed).unwrap();
+            assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
+            let mut changed = app.task(sync.id).unwrap().clone();
+            if let TaskSpec::Sync { mode, .. } = &mut changed.spec {
+                *mode = SyncMode::AddMissing;
+            }
+            app.upsert_task(changed).unwrap();
+            assert_eq!(
+                app.task_approval_problem(app.task(sync.id).unwrap()).as_deref(),
+                Some("This task's schedule hasn't been approved.")
+            );
+            app.approve_task(sync.id, false).unwrap();
 
             // The target becomes Production after approval.
             app.connections[1].environment = Some(ConnectionEnvironment::Production);
