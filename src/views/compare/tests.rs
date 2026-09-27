@@ -1338,25 +1338,6 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
         assert!(tab.sync.excluded.is_empty(), "a new mode starts from every collection");
     });
     assert!(cx.debug_bounds("compare-sync-totals").is_some());
-
-    // The swap sends the sync the other way.
-    let target = |cx: &mut VisualTestContext| {
-        state.read_with(cx, |state, _| state.compare_tab(id).unwrap().sync.target)
-    };
-    let swap = find(cx, "sync-swap".into()).expect("the swap button");
-    cx.simulate_click(swap.bounds().center(), Default::default());
-    draw(cx);
-    assert_eq!(target(cx), Some(Side::Left));
-
-    // With no way picked, a button per direction; the first syncs into the right.
-    state.update(cx, |state, _| state.compare_tab_mut(id).unwrap().sync.clear_target());
-    draw(cx);
-    assert!(find(cx, "sync-swap".into()).is_none());
-    assert!(find(cx, ("sync-direction", 1usize).into()).is_some());
-    let into_right = find(cx, ("sync-direction", 0usize).into()).expect("direction buttons");
-    cx.simulate_click(into_right.bounds().center(), Default::default());
-    draw(cx);
-    assert_eq!(target(cx), Some(Side::Right));
     for width in [700.0, 430.0] {
         cx.simulate_resize(size(px(width), px(1000.0)));
         draw(cx);

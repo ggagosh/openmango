@@ -4,7 +4,7 @@ use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, Size,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size,
 };
 use gpui_kit::*;
 
@@ -16,6 +16,7 @@ use crate::components::{
 use crate::connection::ops::compare::Side;
 use crate::connection::ops::compare_database::SyncMode;
 use crate::error::ErrorReport;
+use crate::state::compare::CompareScope;
 use crate::state::{AppCommands, AppState};
 use crate::tasks::model::{SyncChoice, side_index};
 use crate::theme::spacing;
@@ -752,13 +753,49 @@ fn save_choice(
     // The direction: where documents come from, where they go, and a swap.
     let target = side_index(current.target);
     let source = 1 - target;
+    let endpoint = |index: usize| {
+        let side = &config.sides[index];
+        let place = if config.scope == CompareScope::Collections && !side.collection.is_empty() {
+            format!("{}.{}", side.database, side.collection)
+        } else {
+            side.database.clone()
+        };
+        let connection = side
+            .connection_id
+            .and_then(|id| app.connection_name(id))
+            .unwrap_or_else(|| "Connection".into());
+        let color = if index == 0 { theme.cyan } else { theme.magenta };
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::xs())
+                    .min_w_0()
+                    .child(div().flex_none().size(px(6.0)).rounded_full().bg(color))
+                    .child(div().text_sm().truncate().child(place)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .truncate()
+                    .child(format!("{} · {connection}", if index == 0 { "Left" } else { "Right" })),
+            )
+    };
     let direction = field("Direction")
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(spacing::sm())
-                .child(crate::views::compare::direction(app, config, current.target, true, cx))
+                .child(endpoint(source))
+                .child(Icon::new(IconName::ArrowRight).small().text_color(muted))
+                .child(endpoint(target))
                 .child(
                     Button::new("save-swap")
                         .icon(crate::views::compare::app_icon("arrow-left-right").small())

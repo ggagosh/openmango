@@ -54,8 +54,7 @@ offers **Copy to Right…** (or Left), also on `enter`, which opens Transfer wit
 in for review. Validators remain under Later.
 
 **PR 4, database sync: built.** The collection scope's sync bar now serves the database scope:
-**Sync** one way, picked from two buttons drawn as `● left → ● right` and the reverse (then shown
-with a swap), then **Write** one of three modes, then a tick box on each collection
+**Sync to** Left or Right, then **Write** one of three modes, then a tick box on each collection
 the mode can write, all ticked. "Review and sync N collections" asks once, with totals, and
 counts each collection as one write against a Production connection.
 
