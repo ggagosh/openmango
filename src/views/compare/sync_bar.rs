@@ -413,14 +413,7 @@ impl CompareView {
             )
         };
         let mut notes = vec![
-            match mode {
-                SyncMode::AddMissing => {
-                    "Inserts documents the target lacks. Existing documents are left alone."
-                }
-                SyncMode::AddAndUpdate => "Also replaces documents that differ. Nothing is deleted.",
-                SyncMode::Mirror => "Also deletes documents only the target has.",
-            }
-            .to_string(),
+            mode.note().to_string(),
             "Collections only on the target, views, time-series and minor differences are left alone.".into(),
         ];
         if let Some(reason) = app.compare_sync_disabled_reason(id, false) {

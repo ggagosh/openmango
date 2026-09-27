@@ -640,6 +640,32 @@ mod tests {
             );
             app.approve_task(sync.id, false).unwrap();
 
+            // Saving the connection gives it a new keychain id, which approval leaves out.
+            app.connections[1].secret_id = Some(uuid::Uuid::new_v4());
+            assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
+
+            // An approval from before hashed that id: it holds while the id is the same, and
+            // asks once more when it isn't, since it can't tell what changed.
+            let mut earlier = app.task(sync.id).unwrap().clone();
+            let hashes = app
+                .connections
+                .iter()
+                .map(|c| (c.id, crate::actions::connection_identity_hash(c).unwrap()))
+                .collect();
+            earlier.approval = Some(crate::tasks::model::Approval {
+                connections: hashes,
+                protected_writes: false,
+                version: 0,
+            });
+            app.upsert_task(earlier).unwrap();
+            assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
+            app.connections[1].secret_id = Some(uuid::Uuid::new_v4());
+            assert!(
+                app.task_approval_problem(app.task(sync.id).unwrap())
+                    .is_some_and(|problem| problem.contains("from an earlier OpenMango"))
+            );
+            app.approve_task(sync.id, false).unwrap();
+
             // The target becomes Production after approval.
             app.connections[1].environment = Some(ConnectionEnvironment::Production);
             let task = app.task(sync.id).unwrap();

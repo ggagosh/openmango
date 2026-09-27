@@ -432,7 +432,7 @@ pub(super) async fn compare_databases(
         .collect();
     let (sender, receiver) = futures::channel::mpsc::unbounded();
     let (_, messages) = tokio::join!(
-        compare_pairs_async(clients, plan.databases.clone(), scans, plan.ignore, sender),
+        compare_pairs_async(clients, plan.databases.clone(), scans, plan.ignore, None, sender),
         receiver.collect::<Vec<_>>()
     );
     timer.abort();

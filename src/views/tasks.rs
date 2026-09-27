@@ -1507,13 +1507,15 @@ mod tests {
             draw(cx);
         };
 
-        // With the sync list closed it starts as a comparison, and can be made a sync.
+        // With the sync list closed it starts as a comparison, and can be made a sync. The name
+        // follows the choice, since nobody edited it.
         open(None, cx);
         click("save-sync".into(), cx);
-        click(("save-sync-mode", 2usize).into(), cx);
+        click("save-mirror".into(), cx);
         click("save-task".into(), cx);
         assert!(!cx.update(|window, cx| window.has_active_dialog(cx)), "saving closes it");
         let task = state.read_with(cx, |app, _| app.tasks.tasks[0].clone());
+        assert_eq!(task.name, "Mirror shop to shop_copy");
         assert_eq!(task.spec.sync_choice(), Some((Side::Right, SyncMode::Mirror)));
         assert_eq!(
             task.spec.sentence(|_| None).as_deref(),
@@ -1522,23 +1524,61 @@ mod tests {
                  documents, replaces those that differ, and deletes those only shop_copy has."
             )
         );
+        // The tab's sync list now shows what was saved.
+        let bar = state.read_with(cx, |app, _| {
+            let sync = &app.compare_tab(id).unwrap().sync;
+            (sync.target, sync.mode)
+        });
+        assert_eq!(bar, (Some(Side::Right), SyncMode::Mirror));
 
-        // Save task keeps it a sync while the sync list is closed, without asking.
+        // Save task matches it, so it saves without asking.
         cx.update(|window, cx| AppCommands::save_linked_task(&state, &key, window, cx));
         assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
         let saved = state.read_with(cx, |app, _| app.task(task.id).unwrap().spec.sync_choice());
         assert_eq!(saved, Some((Side::Right, SyncMode::Mirror)));
 
-        // The sync list picking another way asks first, starting from what the list shows,
-        // and saves into the same task.
-        state.update(cx, |app, _| app.compare_tab_mut(id).unwrap().sync.set_target(Side::Left));
+        // The sync list picking another way asks first, and saves into the same task, whose
+        // name stays; swapping in the dialog turns it back.
+        state.update(cx, |app, _| {
+            let sync = &mut app.compare_tab_mut(id).unwrap().sync;
+            sync.clear_target();
+            sync.set_target(Side::Left);
+        });
         cx.update(|window, cx| AppCommands::save_linked_task(&state, &key, window, cx));
         draw(cx);
         assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        click("save-swap".into(), cx);
+        click("save-swap".into(), cx);
         click("save-task".into(), cx);
         let tasks = state.read_with(cx, |app, _| app.tasks.tasks.clone());
         assert_eq!(tasks.len(), 1, "saved into the task, not beside it");
-        assert_eq!(tasks[0].spec.sync_choice(), Some((Side::Left, SyncMode::AddMissing)));
+        assert_eq!(tasks[0].name, "Mirror shop to shop_copy");
+        assert_eq!(tasks[0].spec.sync_choice(), Some((Side::Left, SyncMode::Mirror)));
+
+        // Two collections sync too, by _id; matched by another field, they can only compare.
+        let id = state.update(cx, |app, cx| {
+            let mut config = CompareConfig::default();
+            config.sides[0].database = "shop".into();
+            config.sides[0].collection = "orders".into();
+            config.sides[1].database = "shop_copy".into();
+            config.sides[1].collection = "orders_copy".into();
+            app.open_compare_tab_with(config, cx)
+        });
+        let key = TabKey::Compare(crate::state::compare::CompareTabKey { id, connection_id: None });
+        cx.update(|window, cx| {
+            crate::app::dialogs::open_save_task_dialog(state.clone(), key, None, window, cx)
+        });
+        draw(cx);
+        click("save-sync".into(), cx);
+        click("save-task".into(), cx);
+        let task = state.read_with(cx, |app, _| app.tasks.tasks[1].clone());
+        assert_eq!(task.name, "Add missing orders to orders_copy");
+        assert_eq!(task.spec.sync_choice(), Some((Side::Right, SyncMode::AddMissing)));
+        state.update(cx, |app, _| {
+            app.compare_tab_mut(id).unwrap().config.fields = vec!["sku".into()];
+            assert!(app.compare_sync_task_blocked(id).unwrap().contains("matches by sku"));
+            assert_eq!(app.compare_save_choice(id), None);
+        });
     }
 
     #[gpui_kit::test]

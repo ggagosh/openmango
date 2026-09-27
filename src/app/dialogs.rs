@@ -1,10 +1,11 @@
-use gpui_kit::component::Disableable as _;
-use gpui_kit::component::Size;
 use gpui_kit::component::WindowExt as _;
+use gpui_kit::component::button::ButtonGroup;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::input::InputState;
-use gpui_kit::component::radio::Radio;
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size,
+};
 use gpui_kit::*;
 
 use crate::components::ErrorCallout;
@@ -519,6 +520,8 @@ struct SaveChoice {
     sync: bool,
     target: Side,
     mode: SyncMode,
+    /// The name filled in for the choice, which follows the choice until someone edits it.
+    auto_name: Option<String>,
 }
 
 impl SaveChoice {
@@ -527,9 +530,11 @@ impl SaveChoice {
     }
 }
 
+/// Changes the choice, and the name with it while it's the one filled in.
+type Choose = std::rc::Rc<dyn Fn(&dyn Fn(&mut SaveChoice), &mut Window, &mut App)>;
+
 /// Saves a Transfer or Compare tab as a new task, or with `into`, into that task. For a
-/// Compare tab it shows what each run will do, and for two databases lets you pick between
-/// comparing only and syncing, which way and how.
+/// Compare tab it asks whether each run compares only or also syncs, which way and how.
 pub(crate) fn open_save_task_dialog(
     state: Entity<AppState>,
     tab: crate::state::TabKey,
@@ -542,10 +547,14 @@ pub(crate) fn open_save_task_dialog(
         _ => None,
     };
     let start = compare.and_then(|id| state.read(cx).compare_save_choice(id));
+    // With nothing picked yet, the side that can take writes, the right one if both can.
+    let right_blocked = compare
+        .is_some_and(|id| state.read(cx).compare_sync_target_disabled_reason(id, 1).is_some());
     let choice = cx.new(|_| SaveChoice {
         sync: start.is_some(),
-        target: start.map_or(Side::Right, |(target, _)| target),
+        target: start.map_or(if right_blocked { Side::Left } else { Side::Right }, |(t, _)| t),
         mode: start.map_or(SyncMode::AddMissing, |(_, mode)| mode),
+        auto_name: None,
     });
     // Read the tab again each time: it may change while the dialog is open.
     let spec_now = {
@@ -570,9 +579,28 @@ pub(crate) fn open_save_task_dialog(
         None if compare.is_some() => "Save as a task".to_string(),
         None => format!("Save {} as a task", spec.kind().label().to_lowercase()),
     };
-    let default_name = existing.unwrap_or_else(|| spec.default_name());
-    let name_state = cx
-        .new(|cx| InputState::new(window, cx).placeholder("Task name").default_value(default_name));
+    // A task being saved into keeps its name; a new one's follows the choice until edited.
+    let name = existing.clone().unwrap_or_else(|| spec.default_name());
+    choice.update(cx, |choice, _| choice.auto_name = existing.is_none().then(|| name.clone()));
+    let name_state =
+        cx.new(|cx| InputState::new(window, cx).placeholder("Task name").default_value(name));
+    let choose: Choose = {
+        let (choice, name_state, spec_now) = (choice.clone(), name_state.clone(), spec_now.clone());
+        std::rc::Rc::new(move |edit, window, cx| {
+            choice.update(cx, |choice, cx| {
+                edit(choice);
+                cx.notify();
+            });
+            let auto = choice.read(cx).auto_name.clone();
+            if auto.as_deref() != Some(name_state.read(cx).value().as_ref()) {
+                return;
+            }
+            if let Some(next) = spec_now(cx).map(|spec| spec.default_name()) {
+                name_state.update(cx, |input, cx| input.set_value(next.clone(), window, cx));
+                choice.update(cx, |choice, _| choice.auto_name = Some(next));
+            }
+        })
+    };
     let run = cx.new(|_| DialogRun::default());
     window.open_dialog(cx, move |dialog: Dialog, _window: &mut Window, cx: &mut App| {
         // A side the sync bar wouldn't allow as the target can't be saved as one either.
@@ -620,23 +648,22 @@ pub(crate) fn open_save_task_dialog(
             }
         };
         let save_on_enter = save.clone();
-        let muted = gpui_kit::component::ActiveTheme::theme(cx).muted_foreground;
         let about = match compare {
-            Some(id) => save_choice(&state, id, &choice, cx),
+            Some(id) => save_choice(&state, id, &choice, choose.clone(), cx),
             None => div()
                 .text_sm()
-                .text_color(muted)
+                .text_color(cx.theme().muted_foreground)
                 .child("Run it again from Tasks, with the settings this tab has now.")
                 .into_any_element(),
         };
         dialog
             .title(title.clone())
-            .min_w(px(420.0))
+            .w(px(560.0))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(spacing::md())
+                    .gap(spacing::lg())
                     .p(spacing::md())
                     .child(
                         div()
@@ -660,120 +687,161 @@ pub(crate) fn open_save_task_dialog(
     });
 }
 
-/// "Each run": compare only, or sync into a side in a mode, then what that does in words.
+/// "Each run", then for a sync the direction and what it writes.
 fn save_choice(
     state: &Entity<AppState>,
     compare_id: Uuid,
     choice: &Entity<SaveChoice>,
+    choose: Choose,
     cx: &App,
 ) -> AnyElement {
     let app = state.read(cx);
-    let muted = gpui_kit::component::ActiveTheme::theme(cx).muted_foreground;
+    let theme = cx.theme();
+    let (muted, danger) = (theme.muted_foreground, theme.danger);
     let current = choice.read(cx);
-    let sentence = app
-        .compare_task_spec(compare_id, current.get())
-        .and_then(|spec| spec.sentence(|id| app.connection_name(id)));
     let Some(tab) = app.compare_tab(compare_id) else {
         return div().into_any_element();
     };
-    let label = |text: &'static str| {
-        div().min_w(px(56.0)).flex_none().text_sm().text_color(muted).child(text)
-    };
-    let pick = |edit: fn(&mut SaveChoice, usize), value: usize| {
-        let choice = choice.clone();
-        move |_: &bool, _: &mut Window, cx: &mut App| {
-            choice.update(cx, |choice, cx| {
-                edit(choice, value);
-                cx.notify();
-            })
-        }
-    };
-    let mut section = div().flex().flex_col().gap(spacing::sm());
-    if tab.config.scope == CompareScope::Databases {
-        let reasons =
-            [0, 1].map(|index| app.compare_sync_target_disabled_reason(compare_id, index));
-        let kinds = div()
+    let config = &tab.config;
+    let reasons = [0, 1].map(|index| app.compare_sync_target_disabled_reason(compare_id, index));
+    // Why this comparison can't be a sync at all, if it can't.
+    let cannot = app
+        .compare_sync_task_blocked(compare_id)
+        .or_else(|| reasons.iter().all(Option::is_some).then(|| reasons[0].clone()).flatten());
+    let field = |label: &'static str| {
+        div()
             .flex()
             .flex_col()
             .gap(spacing::xs())
-            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Each run"))
-            .child(
-                Radio::new("save-compare-only")
-                    .label("Compares only: reports what differs, writes nothing")
-                    .checked(!current.sync)
-                    .on_click(pick(|choice, _| choice.sync = false, 0)),
-            )
-            .child(
-                Radio::new("save-sync")
-                    .label("Compares, then syncs")
-                    .checked(current.sync)
-                    .disabled(reasons.iter().all(Option::is_some))
-                    .on_click(pick(|choice, _| choice.sync = true, 0)),
-            );
-        section = section.child(kinds);
-        // Neither side can receive writes: say why rather than only greying out the choice.
-        if let [Some(reason), Some(_)] = &reasons {
-            section = section
-                .child(div().text_sm().text_color(muted).child(format!("Can't sync: {reason}")));
-        }
-        if current.sync {
-            let mut sides = div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_x(spacing::md())
-                .gap_y(spacing::xs())
-                .child(label("Sync to"));
-            for (index, target) in [Side::Left, Side::Right].into_iter().enumerate() {
-                let endpoint = &tab.config.sides[index];
-                let connection = endpoint
-                    .connection_id
-                    .and_then(|id| app.connection_name(id))
-                    .unwrap_or_else(|| "Connection".into());
-                sides = sides.child(
-                    Radio::new(("save-sync-target", index))
-                        .label(format!(
-                            "{} · {connection} · {}",
-                            if index == 0 { "Left" } else { "Right" },
-                            endpoint.database
-                        ))
-                        .checked(current.target == target)
-                        .disabled(reasons[index].is_some())
-                        .on_click(pick(
-                            |choice, index| choice.target = [Side::Left, Side::Right][index],
-                            index,
-                        )),
-                );
-            }
-            let mut modes =
-                div().flex().flex_wrap().items_center().gap_x(spacing::md()).child(label("Write"));
-            for (index, mode) in SyncMode::ALL.into_iter().enumerate() {
-                modes = modes.child(
-                    Radio::new(("save-sync-mode", index))
-                        .label(mode.label())
-                        .checked(current.mode == mode)
-                        .on_click(pick(|choice, index| choice.mode = SyncMode::ALL[index], index)),
-                );
-            }
-            // Under "Compares, then syncs", which they belong to.
-            section = section.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(spacing::xs())
-                    .pl(spacing::lg())
-                    .child(sides)
-                    .child(modes),
-            );
-            if let Some(reason) = reasons[side_index(current.target)].clone() {
-                section = section.child(
-                    div()
-                        .text_sm()
-                        .text_color(gpui_kit::component::ActiveTheme::theme(cx).danger)
-                        .child(reason),
-                );
-            }
+            .child(div().text_sm().text_color(theme.foreground).child(label))
+    };
+    let note = |text: String| div().text_xs().text_color(muted).child(text);
+    let segment = |id: &'static str, label: &'static str, selected: bool| {
+        Button::new(id).label(label).selected(selected).with_size(Size::Small)
+    };
+
+    let mut kind_notes = Vec::new();
+    if !current.sync {
+        kind_notes.push("Reports what differs. Writes nothing.".to_string());
+        if let Some(reason) = &cannot {
+            kind_notes.push(format!("Syncing isn't possible here. {reason}"));
         }
     }
-    section.child(div().text_sm().text_color(muted).children(sentence)).into_any_element()
+    let each_run = field("Each run")
+        .child(
+            ButtonGroup::new("save-kind")
+                .compact()
+                .child(segment("save-compare-only", "Compare only", !current.sync))
+                .child(
+                    segment("save-sync", "Compare and sync", current.sync)
+                        .disabled(cannot.is_some()),
+                )
+                .on_click({
+                    let choose = choose.clone();
+                    move |selection: &Vec<usize>, window, cx| {
+                        let sync = selection.first() == Some(&1);
+                        choose(&|choice| choice.sync = sync, window, cx)
+                    }
+                }),
+        )
+        .children(kind_notes.into_iter().map(note));
+    let mut section = div().flex().flex_col().gap(spacing::lg()).child(each_run);
+    if !current.sync {
+        return section.into_any_element();
+    }
+
+    // The direction: where documents come from, where they go, and a swap.
+    let target = side_index(current.target);
+    let source = 1 - target;
+    let endpoint = |index: usize| {
+        let side = &config.sides[index];
+        let place = if config.scope == CompareScope::Collections && !side.collection.is_empty() {
+            format!("{}.{}", side.database, side.collection)
+        } else {
+            side.database.clone()
+        };
+        let connection = side
+            .connection_id
+            .and_then(|id| app.connection_name(id))
+            .unwrap_or_else(|| "Connection".into());
+        let color = if index == 0 { theme.cyan } else { theme.magenta };
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::xs())
+                    .min_w_0()
+                    .child(div().flex_none().size(px(6.0)).rounded_full().bg(color))
+                    .child(div().text_sm().truncate().child(place)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .truncate()
+                    .child(format!("{} · {connection}", if index == 0 { "Left" } else { "Right" })),
+            )
+    };
+    let direction = field("Direction")
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .child(endpoint(source))
+                .child(Icon::new(IconName::ArrowRight).small().text_color(muted))
+                .child(endpoint(target))
+                .child(
+                    Button::new("save-swap")
+                        .icon(crate::views::compare::app_icon("arrow-left-right").small())
+                        .small()
+                        .ghost()
+                        .tooltip("Sync the other way")
+                        .accessibility_label("Sync the other way")
+                        .disabled(reasons[source].is_some())
+                        .on_click({
+                            let choose = choose.clone();
+                            move |_, window, cx| {
+                                choose(
+                                    &|choice| {
+                                        choice.target = match choice.target {
+                                            Side::Left => Side::Right,
+                                            Side::Right => Side::Left,
+                                        }
+                                    },
+                                    window,
+                                    cx,
+                                )
+                            }
+                        }),
+                ),
+        )
+        .children(
+            reasons[target].clone().map(|reason| div().text_xs().text_color(danger).child(reason)),
+        );
+    let write = field("Write")
+        .child(
+            ButtonGroup::new("save-mode")
+                .compact()
+                .children(SyncMode::ALL.map(|mode| {
+                    let id = match mode {
+                        SyncMode::AddMissing => "save-add-missing",
+                        SyncMode::AddAndUpdate => "save-add-and-update",
+                        SyncMode::Mirror => "save-mirror",
+                    };
+                    segment(id, mode.label(), current.mode == mode)
+                }))
+                .on_click(move |selection: &Vec<usize>, window, cx| {
+                    let mode = SyncMode::ALL[selection.first().copied().unwrap_or(0)];
+                    choose(&|choice| choice.mode = mode, window, cx)
+                }),
+        )
+        .child(note(current.mode.note().to_string()));
+    section = section.child(direction).child(write);
+    section.into_any_element()
 }

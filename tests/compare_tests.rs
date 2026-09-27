@@ -548,6 +548,7 @@ async fn database_scan_counts_each_collection_with_one_comparator_and_honours_sk
             [left.name().to_string(), right.name().to_string()],
             scans,
             IgnoreSet::new(&["updatedAt".to_string()]),
+            None,
             sender,
         ),
         receiver.collect::<Vec<_>>(),

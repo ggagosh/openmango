@@ -60,6 +60,14 @@ pub struct Approval {
     pub connections: Vec<(Uuid, String)>,
     /// Scheduled runs may write to a Production or protected connection.
     pub protected_writes: bool,
+    /// How the hashes were made: 0 with the connection's keychain entry id, which any save
+    /// changes, 1 without it.
+    #[serde(default)]
+    pub version: u8,
+}
+
+impl Approval {
+    pub const VERSION: u8 = 1;
 }
 
 impl Task {
@@ -191,7 +199,10 @@ impl TaskSpec {
                 }
             }
             Self::Sync { config, target, mode, .. } => {
-                let [left, right] = config.sides.each_ref().map(|side| side.database.as_str());
+                let [left, right] = config.sides.each_ref().map(|side| match config.scope {
+                    CompareScope::Collections => pick(&side.collection, &side.database),
+                    CompareScope::Databases => side.database.clone(),
+                });
                 let (source, destination) =
                     if *target == Side::Right { (left, right) } else { (right, left) };
                 format!("{} {source} to {destination}", mode.label())
@@ -222,6 +233,9 @@ impl TaskSpec {
             }
         }
         let [left, right] = &sides;
+        let filtered =
+            config.scope == CompareScope::Collections && !config.filter.trim().is_empty();
+        let only = if filtered { " Only documents the filter matches take part." } else { "" };
         Some(match self {
             Self::Sync { target, mode, .. } => {
                 let into = if *target == Side::Right { right } else { left };
@@ -235,9 +249,11 @@ impl TaskSpec {
                          differ, and deletes those only {into} has"
                     ),
                 };
-                format!("Compares {left} with {right}, then {writes}.")
+                format!("Compares {left} with {right}, then {writes}.{only}")
             }
-            _ => format!("Compares {left} with {right} and reports what differs. Writes nothing."),
+            _ => format!(
+                "Compares {left} with {right} and reports what differs. Writes nothing.{only}"
+            ),
         })
     }
 

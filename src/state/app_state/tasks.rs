@@ -5,6 +5,8 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Subscription};
 use uuid::Uuid;
 
 use crate::connection::CancellationToken;
+use crate::connection::ops::compare::Side;
+use crate::connection::ops::compare_database::SyncMode;
 use crate::helpers::background_runner::{self, RunnerStatus};
 use crate::models::{ConnectionEnvironment, SavedConnection};
 use crate::state::compare::{CompareScope, CompareTaskLink};
@@ -179,9 +181,15 @@ fn same_writes(before: &TaskSpec, after: &TaskSpec) -> bool {
         && before.sync_choice() == after.sync_choice()
 }
 
-/// The connection's identity, as task approval records it.
-fn identity(connection: &SavedConnection) -> String {
-    crate::actions::connection_identity_hash(connection).unwrap_or_default()
+/// The connection's identity, as task approval records it: what decides where, and as whom, a
+/// task writes. Version 0 approvals also hashed the keychain entry's id, which changes whenever
+/// the connection is saved, even unchanged.
+fn identity(connection: &SavedConnection, version: u8) -> String {
+    let mut connection = connection.clone();
+    if version >= Approval::VERSION {
+        connection.secret_id = None;
+    }
+    crate::actions::connection_identity_hash(&connection).unwrap_or_default()
 }
 
 impl AppState {
@@ -571,9 +579,9 @@ impl AppState {
             .spec
             .connections()
             .into_iter()
-            .filter_map(|id| Some((id, identity(self.connection_by_id(id)?))))
+            .filter_map(|id| Some((id, identity(self.connection_by_id(id)?, Approval::VERSION))))
             .collect();
-        Approval { connections, protected_writes }
+        Approval { connections, protected_writes, version: Approval::VERSION }
     }
 
     /// The name of the Production or protected connection the task writes to, if it writes to
@@ -596,8 +604,17 @@ impl AppState {
                 return Some("A connection this task uses was deleted.".into());
             };
             let approved = approval.connections.iter().find(|(approved, _)| *approved == id);
-            if approved.is_none_or(|(_, hash)| *hash != identity(connection)) {
-                return Some("Connection settings changed since this task was approved.".into());
+            if approved.is_none_or(|(_, hash)| *hash != identity(connection, approval.version)) {
+                // An approval from before can't tell a changed connection from a resaved one.
+                return Some(
+                    if approval.version < Approval::VERSION {
+                        "This approval is from an earlier OpenMango and can't be checked. Approve \
+                     it once more."
+                    } else {
+                        "Connection settings changed since this task was approved."
+                    }
+                    .into(),
+                );
             }
         }
         if !approval.protected_writes
@@ -749,24 +766,58 @@ impl AppState {
 
     /// What saving the Compare tab starts from: a sync in the sync list's direction and mode
     /// while it's showing, else in those of the Sync task the tab belongs to, else a
-    /// comparison. Only a database comparison can sync.
+    /// comparison.
     pub fn compare_save_choice(&self, compare_id: Uuid) -> SyncChoice {
         let tab = self.compare_tab(compare_id)?;
-        if tab.config.scope != CompareScope::Databases {
+        if self.compare_sync_task_blocked(compare_id).is_some() {
             return None;
         }
         if let Some(target) = tab.sync.target {
-            return Some((target, tab.sync.mode));
+            let mode = match tab.config.scope {
+                CompareScope::Databases => tab.sync.mode,
+                // Two collections: the sync list picks kinds of difference, not a mode.
+                CompareScope::Collections => {
+                    let only_on_target = if target == Side::Right { 1 } else { 0 };
+                    if tab.sync.categories[only_on_target].all {
+                        SyncMode::Mirror
+                    } else if tab.sync.categories[2].all {
+                        SyncMode::AddAndUpdate
+                    } else {
+                        SyncMode::AddMissing
+                    }
+                }
+            };
+            return Some((target, mode));
         }
         self.task(tab.task.as_ref()?.id)?.spec.sync_choice()
+    }
+
+    /// Why the Compare tab can't be saved as a sync task, if it can't. A comparison of two
+    /// collections needs a collection on each side, and has to match documents by `_id`, as
+    /// the task's sync does.
+    pub fn compare_sync_task_blocked(&self, compare_id: Uuid) -> Option<String> {
+        let config = &self.compare_tab(compare_id)?.config;
+        if config.scope == CompareScope::Databases {
+            return None;
+        }
+        if config.sides.iter().any(|side| side.collection.is_empty()) {
+            return Some("Pick a collection on each side to sync them.".into());
+        }
+        if !config.fields.is_empty() && config.fields != ["_id"] {
+            return Some(format!(
+                "A sync matches documents by _id, and this comparison matches by {}.",
+                config.fields.join(", ")
+            ));
+        }
+        None
     }
 
     /// What saving this Compare tab as a task stores: a comparison, or with `choice` a sync.
     pub fn compare_task_spec(&self, compare_id: Uuid, choice: SyncChoice) -> Option<TaskSpec> {
         let tab = self.compare_tab(compare_id)?;
         let config = tab.config.clone();
-        let Some((target, mode)) = choice.filter(|_| config.scope == CompareScope::Databases)
-        else {
+        let blocked = self.compare_sync_task_blocked(compare_id).is_some();
+        let Some((target, mode)) = choice.filter(|_| !blocked) else {
             return Some(TaskSpec::Compare { config });
         };
         // The sync list's unticked collections, or with it closed, the task's.
@@ -806,7 +857,14 @@ impl AppState {
                     _ => None,
                 };
                 if let Some(state) = self.compare_tab_mut(key.id) {
+                    // The sync list shows what was saved: the task's sync, or none.
+                    let syncs = sync.is_some();
                     state.task = Some(CompareTaskLink { id: task_id, sync });
+                    if syncs {
+                        state.apply_task_sync();
+                    } else {
+                        state.sync.clear_target();
+                    }
                 }
             }
             _ => {}

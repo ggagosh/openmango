@@ -306,6 +306,20 @@ the background runner (PR 4), and section 7.4.
   gives it a new keychain id, part of the approval fingerprint. Connecting now saves only the
   time, so approvals and agent grants hold.
 - **Run while closed on Windows and Linux:** the option was still shown only on macOS.
+- **Two collections sync too.** A Sync task from a comparison of two collections runs as one
+  pair through the same scan, plan, safety limit, write and undo: each side opens under its own
+  collection name (`NamedPair`), and the comparison's filter limits both the scan and the write.
+  It matches by `_id`, as the task's sync does, so a comparison matched by other fields saves
+  as a comparison only, and the dialog says why. The pair is named after the target collection,
+  which Undo opens by that name.
+- **The dialog, redone after a screenshot:** segmented choices for Each run and Write, the
+  direction as source → target with a swap, the sync list's own mode notes, 560 px wide. A new
+  task's name follows the choice until it's edited. Saving leaves the tab's sync list showing
+  what was saved, or closes it for a comparison.
+- **Approvals leave out the keychain entry's id** (approval version 1), which any save of the
+  connection changes. A version 0 approval still holds while that id is the same; when it
+  isn't, the task says the approval is from an earlier OpenMango and asks once more, rather than
+  claiming the connection changed.
 - **The Dock (macOS):** the background runner no longer bounces OpenMango's Dock icon.
 
 ## 1. What the evidence says

@@ -21,8 +21,9 @@ use crate::connection::ops::compare::{
     CompareMessage, CompareOptions, MAX_ROWS, Side, compare_collections_async,
 };
 use crate::connection::ops::compare_database::{
-    CollectionKind, CollectionPair, DatabaseSync, PairMessage, PairScan, PairSync, PairSyncMessage,
-    SyncMode, compare_pairs_async, list_side, pair_collections, sync_pairs_async, undo_pairs_async,
+    CollectionKind, CollectionPair, DatabaseSync, NamedPair, PairMessage, PairScan, PairSync,
+    PairSyncMessage, SyncMode, compare_pairs_async, list_side, pair_collections, sync_pairs_async,
+    undo_pairs_async,
 };
 use crate::connection::ops::compare_sync::SyncSummary;
 use crate::helpers::format_number;
@@ -216,7 +217,13 @@ impl AppCommands {
                 Self::start_compare_run(state, task, config, launch.trigger(), cx)
             }
             TaskSpec::Sync { config, target, mode, excluded } => {
-                let sync = SyncRequest { config, target, mode, excluded };
+                let named = match named_pair(&config) {
+                    Ok(named) => named,
+                    Err(error) => {
+                        return Self::fail_before_start(&state, &task, launch, &error, cx);
+                    }
+                };
+                let sync = SyncRequest { config, target, mode, excluded, named };
                 Self::start_sync_task(state, task, sync, launch, window, cx);
             }
         }
@@ -1042,6 +1049,7 @@ impl AppCommands {
         task_id: Uuid,
         config: &CompareConfig,
         names: &[(usize, String)],
+        named: Option<NamedPair>,
         reconnect: &Reconnect,
         connections: &mut RunConnections,
         watch: &mut Watch,
@@ -1071,12 +1079,13 @@ impl AppCommands {
                     })
                     .collect();
                 let (sender, receiver) = futures::channel::mpsc::unbounded();
-                let (databases, ignore) = (databases.clone(), ignore.clone());
+                let (databases, ignore, named) = (databases.clone(), ignore.clone(), named.clone());
                 let work = runtime.spawn(async move {
                     let [Some(left), Some(right)] = clients else {
                         return Err(Failure::lasting("The run's connections closed."));
                     };
-                    compare_pairs_async([left, right], databases, scans, ignore, sender).await;
+                    compare_pairs_async([left, right], databases, scans, ignore, named, sender)
+                        .await;
                     Ok(())
                 });
                 (receiver, async move {
@@ -1140,6 +1149,7 @@ impl AppCommands {
             task_id,
             config,
             &names,
+            None,
             reconnect,
             connections,
             watch,
@@ -1214,7 +1224,10 @@ impl AppCommands {
             )
             .await
             {
-                Ok(pairs) => pairs,
+                Ok(pairs) => match &sync.named {
+                    Some(named) => named_listing(&pairs, named, sync.target),
+                    None => pairs,
+                },
                 Err(failure) => return Self::end_run(cx, &state, task_id, &watch, Some(failure)),
             };
             let (plan, notes) = sync_plan(&pairs, sync.target, &sync.excluded, &sync.config.skip);
@@ -1241,6 +1254,7 @@ impl AppCommands {
                 task_id,
                 &sync.config,
                 &compared,
+                sync.named.clone(),
                 &reconnect,
                 &mut connections,
                 &mut watch,
@@ -1520,13 +1534,17 @@ impl AppCommands {
                             })
                             .collect();
                         let (sender, receiver) = futures::channel::mpsc::unbounded();
-                        let request =
-                            (databases.clone(), sync.config.ignore_set(), restore_dir.clone());
+                        let request = (
+                            databases.clone(),
+                            sync.config.ignore_set(),
+                            restore_dir.clone(),
+                            sync.named.clone(),
+                        );
                         let work = runtime.spawn(async move {
                             let [Some(left), Some(right)] = clients else {
                                 return Err(Failure::lasting("The run's connections closed."));
                             };
-                            let (databases, ignore, restore_dir) = request;
+                            let (databases, ignore, restore_dir, named) = request;
                             sync_pairs_async(
                                 DatabaseSync {
                                     clients: [left, right],
@@ -1538,6 +1556,7 @@ impl AppCommands {
                                     restore_dir,
                                     pass_rows: MAX_ROWS,
                                     deletes_only,
+                                    named,
                                 },
                                 token,
                                 sender,
@@ -1837,6 +1856,38 @@ struct SyncRequest {
     target: Side,
     mode: SyncMode,
     excluded: Vec<String>,
+    /// A comparison of two collections: the pair, under its own names and filter.
+    named: Option<NamedPair>,
+}
+
+/// A comparison of two collections as a named pair, with its filter; `None` for two databases.
+fn named_pair(config: &CompareConfig) -> Result<Option<NamedPair>, String> {
+    if config.scope != CompareScope::Collections {
+        return Ok(None);
+    }
+    let filter = if config.filter.trim().is_empty() {
+        Document::new()
+    } else {
+        crate::bson::parse_document_from_json(&config.filter)
+            .map_err(|error| format!("The filter isn't valid JSON: {error}"))?
+    };
+    let collections = config.sides.each_ref().map(|side| side.collection.clone());
+    Ok(Some(NamedPair { collections, filter }))
+}
+
+/// The listing narrowed to the named pair, as the one pair a sync goes through. It's named
+/// after the target collection, which Undo opens by that name.
+fn named_listing(pairs: &[CollectionPair], named: &NamedPair, target: Side) -> Vec<CollectionPair> {
+    let side = |index: usize| {
+        pairs
+            .iter()
+            .find(|pair| pair.name == named.collections[index])
+            .and_then(|pair| pair.sides[index].clone())
+    };
+    vec![CollectionPair {
+        name: named.collections[side_index(target)].clone(),
+        sides: [side(0), side(1)],
+    }]
 }
 
 /// The question before a run writes. When the safety limit would stop the run, it says why and
@@ -2460,6 +2511,39 @@ mod tests {
         assert_eq!(read(doc! {"_id": 2, "n": 20}, "shop_copy", "orders"), 1);
         assert_eq!(read(doc! {}, "shop_copy", "customers"), 0);
         assert!(state.read_with(cx, |app, _| !app.tasks.undo.contains_key(&mirror.id)));
+
+        // Two collections under their own names, as saved from a comparison of two collections:
+        // only what the filter matches, into a collection the target lacks. Undo takes it back.
+        let mut pair = config.clone();
+        pair.scope = CompareScope::Collections;
+        pair.sides[0].collection = "orders".into();
+        pair.sides[1].collection = "orders_new".into();
+        pair.filter = r#"{"_id": {"$lte": 2}}"#.into();
+        let copy = SavedTask::new(
+            "Add missing orders to orders_new".into(),
+            TaskSpec::Sync {
+                config: pair,
+                target: Side::Right,
+                mode: SyncMode::AddMissing,
+                excluded: vec![],
+            },
+        );
+        save(cx, &copy);
+        run(cx, &copy, false);
+        question(cx);
+        answer(cx);
+        let done = finished(cx, &copy);
+        assert_eq!(done.status, RunStatus::Succeeded, "{done:?}");
+        let names: Vec<&str> = done.collections.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["orders_new"]);
+        assert_eq!(done.writes().inserted, 2);
+        assert_eq!(read(doc! {}, "shop_copy", "orders_new"), 2);
+        assert_eq!(read(doc! {}, "shop_copy", "orders"), 152, "the other orders are left alone");
+        cx.update(|window, cx| AppCommands::undo_task_run(state.clone(), copy.id, window, cx));
+        question(cx);
+        answer(cx);
+        assert_eq!(finished(cx, &copy).status, RunStatus::Succeeded);
+        assert_eq!(read(doc! {}, "shop_copy", "orders_new"), 0);
 
         // A copy from an empty collection that clears its target stops, whatever the floor.
         let refresh_config = TransferConfig {
