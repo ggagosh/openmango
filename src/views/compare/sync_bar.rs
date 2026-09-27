@@ -2,7 +2,6 @@ use gpui_kit::base::CheckboxState;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::radio::Radio;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::tooltip::Tooltip;
 
 use super::database::database_label;
 use super::*;
@@ -89,65 +88,69 @@ impl CompareView {
         let databases = databases(tab);
         let finished = if databases { tab.pair_elapsed.is_some() } else { tab.summary.is_some() };
         let pending = tab.busy() || !finished;
-        let mut choices = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_x(spacing::lg())
-            .gap_y(spacing::xs())
-            .min_w_0()
-            .child(
-                div().text_xs().font_weight(FontWeight::MEDIUM).text_color(muted).child("Sync to"),
-            );
-        for (index, target) in [Side::Left, Side::Right].into_iter().enumerate() {
-            let endpoint = &tab.results_config().sides[index];
-            let reason =
-                if pending { None } else { app.compare_sync_target_disabled_reason(id, index) };
-            let disabled = pending || reason.is_some();
+        let config = tab.results_config();
+        let reasons = [0, 1].map(|index| {
+            (!pending).then(|| app.compare_sync_target_disabled_reason(id, index)).flatten()
+        });
+        let choose = |target: Side| {
             let state = self.state.clone();
-            let choose = move |cx: &mut App| {
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
                 state.update(cx, |app, cx| {
                     if let Some(tab) = app.compare_tab_mut(id) {
                         tab.sync.set_target(target);
                     }
                     cx.notify();
                 })
-            };
-            let radio_choose = choose.clone();
-            let path = if databases {
-                database_label(app, endpoint)
-            } else {
-                endpoint_label(app, endpoint)
-            };
-            let mut option = div()
-                .id(("sync-target-option", index))
-                .flex()
-                .items_center()
-                .gap(spacing::sm())
-                .when(!disabled, |option| {
-                    option.cursor_pointer().on_click(move |_, _, cx| choose(cx))
-                })
-                .child(
-                    Radio::new(("sync-target", index))
-                        .checked(sync.target == Some(target))
-                        .disabled(disabled)
-                        .accessibility_label(format!("{} · {path}", side_name(index)))
-                        .on_click(move |_, _, cx| radio_choose(cx)),
-                )
-                .child(dot(side_color(index, cx)))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .when(disabled, |name| name.text_color(muted))
-                        .child(side_name(index)),
-                )
-                .child(div().text_xs().text_color(muted).truncate().max_w(px(360.0)).child(path));
-            if let Some(reason) = reason {
-                option = option
-                    .tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx));
             }
-            choices = choices.child(option);
+        };
+        let mut choices = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_x(spacing::md())
+            .gap_y(spacing::xs())
+            .min_w_0()
+            .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(muted).child("Sync"));
+        match sync.target {
+            // Which way: a button per direction, each drawn as it would go.
+            None => {
+                for (index, target) in [Side::Right, Side::Left].into_iter().enumerate() {
+                    let into = if target == Side::Left { 0 } else { 1 };
+                    let label = format!(
+                        "Sync {} into {}",
+                        database_label(app, &config.sides[1 - into]),
+                        database_label(app, &config.sides[into])
+                    );
+                    let mut button = Button::new(("sync-direction", index))
+                        .outline()
+                        .small()
+                        .accessibility_label(label)
+                        .disabled(pending || reasons[into].is_some())
+                        .child(direction(app, config, target, false, cx))
+                        .on_click(choose(target));
+                    if let Some(reason) = reasons[into].clone() {
+                        button = button.tooltip(reason);
+                    }
+                    choices = choices.child(button);
+                }
+            }
+            // The way chosen, and a swap to the other.
+            Some(target) => {
+                let other = if target == Side::Left { Side::Right } else { Side::Left };
+                let other_reason = reasons[if other == Side::Left { 0 } else { 1 }].clone();
+                choices = choices.child(direction(app, config, target, true, cx)).child(
+                    Button::new("sync-swap")
+                        .icon(app_icon("arrow-left-right").small())
+                        .small()
+                        .ghost()
+                        .tooltip(other_reason.unwrap_or_else(|| "Sync the other way".into()))
+                        .accessibility_label("Sync the other way")
+                        .disabled(
+                            pending || reasons[if other == Side::Left { 0 } else { 1 }].is_some(),
+                        )
+                        .on_click(choose(other)),
+                );
+            }
         }
 
         let trailing: AnyElement = match sync.target {
@@ -156,10 +159,8 @@ impl CompareView {
                 .text_color(muted)
                 .child(if pending {
                     "Available when the comparison finishes."
-                } else if databases {
-                    "Pick the database that receives the changes."
                 } else {
-                    "Pick the collection that receives the changes."
+                    "Pick which way to sync."
                 })
                 .into_any_element(),
             Some(_) => {

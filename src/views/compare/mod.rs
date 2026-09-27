@@ -27,11 +27,11 @@ use gpui_kit::*;
 use uuid::Uuid;
 
 use crate::components::Button;
-use crate::connection::ops::compare::DiffKind;
+use crate::connection::ops::compare::{DiffKind, Side};
 use crate::keyboard::{
     CancelCompare, CompareNext, ComparePrevious, FindInCompare, FocusCompareDetail, RunCompare,
 };
-use crate::state::compare::{CompareEndpoint, CompareScope};
+use crate::state::compare::{CompareConfig, CompareEndpoint, CompareScope};
 use crate::state::{AppCommands, AppState};
 use crate::theme::{borders, islands, spacing};
 
@@ -87,6 +87,74 @@ pub(super) fn kind_label(kind: DiffKind) -> &'static str {
 /// The 6px marker that names a side or a difference kind everywhere in the tab.
 pub(super) fn dot(color: Hsla) -> Div {
     div().size(px(6.0)).flex_shrink_0().rounded_full().bg(color)
+}
+
+/// One side of a sync's direction: its colour and place, and with `detailed`, under it which
+/// side and connection. The place gives way first when there's no room.
+fn direction_side(
+    app: &AppState,
+    config: &CompareConfig,
+    index: usize,
+    detailed: bool,
+    cx: &App,
+) -> Div {
+    let side = &config.sides[index];
+    let place = if config.scope == CompareScope::Collections && !side.collection.is_empty() {
+        side.namespace()
+    } else {
+        side.database.clone()
+    };
+    let connection = side
+        .connection_id
+        .and_then(|id| app.connection_name(id))
+        .unwrap_or_else(|| "Connection".into());
+    div()
+        .min_w_0()
+        .max_w(px(280.0))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(spacing::xs())
+                .min_w_0()
+                .child(dot(side_color(index, cx)))
+                .child(div().text_sm().truncate().child(place)),
+        )
+        .when(detailed, |side| {
+            side.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .truncate()
+                    .child(format!("{} · {connection}", side_name(index))),
+            )
+        })
+}
+
+/// "● source → ● target", the way a sync writes, with each side's connection when `detailed`.
+/// The sync bar and Save as task share it.
+pub(crate) fn direction(
+    app: &AppState,
+    config: &CompareConfig,
+    target: Side,
+    detailed: bool,
+    cx: &App,
+) -> Div {
+    let target = if target == Side::Left { 0 } else { 1 };
+    div()
+        .flex()
+        .items_center()
+        .gap(spacing::sm())
+        .min_w_0()
+        .child(direction_side(app, config, 1 - target, detailed, cx))
+        .child(
+            div().flex_none().child(
+                Icon::new(IconName::ArrowRight).small().text_color(cx.theme().muted_foreground),
+            ),
+        )
+        .child(direction_side(app, config, target, detailed, cx))
 }
 
 pub(super) fn note(text: impl Into<SharedString>, cx: &App) -> Div {
