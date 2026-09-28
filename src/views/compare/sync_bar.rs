@@ -514,13 +514,24 @@ impl CompareView {
                     ),
             )
             .child(
-                Button::new("sync-unchanged")
-                    .flex_none()
-                    .ghost()
-                    .xsmall()
-                    .label("What stays unchanged?")
-                    .tooltip(unchanged)
-                    .accessibility_label(unchanged),
+                // Opens above, like a disclosure: this sits at the bottom of the window.
+                div().flex_none().child(
+                    gpui_kit::component::popover::Popover::new("sync-unchanged-popover")
+                        .anchor(Anchor::BottomRight)
+                        .trigger(
+                            Button::new("sync-unchanged")
+                                .ghost()
+                                .xsmall()
+                                .label("What stays unchanged?"),
+                        )
+                        .content(move |_, _, _| {
+                            div()
+                                .debug_selector(|| "compare-sync-unchanged".into())
+                                .max_w(px(320.0))
+                                .text_sm()
+                                .child(unchanged)
+                        }),
+                ),
             )
     }
 

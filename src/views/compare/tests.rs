@@ -1341,6 +1341,17 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
     let review = find(cx, "review-sync".into()).expect("Review");
     assert_eq!(review.label(), Some("Review and sync 2 collections"));
 
+    // What stays unchanged? opens its explanation above itself, inside the window.
+    let unchanged = find(cx, "sync-unchanged".into()).expect("What stays unchanged?");
+    cx.simulate_click(unchanged.bounds().center(), Default::default());
+    draw(cx);
+    let text = cx.debug_bounds("compare-sync-unchanged").expect("a click opens it");
+    assert!(text.bottom() <= unchanged.bounds().top(), "{text:?} opens above");
+    assert!(text.right() <= px(1200.0));
+    cx.simulate_click(unchanged.bounds().center(), Default::default());
+    draw(cx);
+    assert!(cx.debug_bounds("compare-sync-unchanged").is_none(), "a second click closes it");
+
     // Narrow panes wrap the row instead of pushing a control out of view, and the line saying
     // which side is written stays.
     for width in [1200.0, 700.0, 430.0] {
