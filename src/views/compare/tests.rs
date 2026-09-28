@@ -1343,7 +1343,7 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
 
     // Narrow panes wrap the row instead of pushing a control out of view, and the line saying
     // which side is written stays.
-    for width in [700.0, 430.0] {
+    for width in [1200.0, 700.0, 430.0] {
         cx.simulate_resize(size(px(width), px(1000.0)));
         draw(cx);
         for control in [
@@ -1357,7 +1357,38 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
         }
         let direction = cx.debug_bounds("compare-sync-direction").expect("the direction line");
         assert!(direction.right() <= px(width) && direction.size.width > px(0.0));
+        // The summary keeps a line's width rather than a letter's.
+        let totals = cx.debug_bounds("compare-sync-totals").expect("the summary");
+        assert!(
+            totals.size.width >= px(200.0),
+            "summary is {:?} wide at {width}",
+            totals.size.width
+        );
     }
+
+    // As in a report: into Left, adding what's missing, with nothing to write.
+    state.update(cx, |state, _| {
+        let tab = state.compare_tab_mut(id).unwrap();
+        tab.sync.clear_target();
+        tab.sync.set_target(Side::Left);
+        tab.sync.set_mode(SyncMode::AddMissing);
+    });
+    for width in [1000.0, 1400.0] {
+        cx.simulate_resize(size(px(width), px(1000.0)));
+        draw(cx);
+        let totals = cx.debug_bounds("compare-sync-totals").expect("the summary");
+        // It takes the row's free space, not the width of its headline.
+        assert!(
+            totals.size.width >= px(400.0),
+            "summary is {:?} wide at {width}",
+            totals.size.width
+        );
+    }
+    state.update(cx, |state, _| {
+        let tab = state.compare_tab_mut(id).unwrap();
+        tab.sync.clear_target();
+        tab.sync.set_target(Side::Right);
+    });
 
     // Nothing ticked: the button carries no count, and the summary says why.
     state.update(cx, |state, _| {

@@ -74,7 +74,7 @@ fn render_sync_direction(
                     .min_w_0()
                     .truncate()
                     .when(written, |path| path.text_color(foreground))
-                    .child(place),
+                    .child(format!("· {place}")),
             )
     };
     let mut line = div()
@@ -494,7 +494,9 @@ impl CompareView {
             .gap_x(spacing::lg())
             .gap_y(spacing::xs())
             .child(
+                // Takes the row's free space: sized to its text, it can squeeze to a letter.
                 div()
+                    .flex_1()
                     .flex()
                     .flex_col()
                     .min_w_0()
@@ -513,6 +515,7 @@ impl CompareView {
             )
             .child(
                 Button::new("sync-unchanged")
+                    .flex_none()
                     .ghost()
                     .xsmall()
                     .label("What stays unchanged?")
