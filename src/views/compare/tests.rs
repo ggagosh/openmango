@@ -1329,7 +1329,7 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
         assert!(tab.sync.excluded.contains(&1));
         assert_eq!(tab.sync_selected().len(), 1);
     });
-    let mirror = find(cx, ("sync-mode", 2usize).into()).expect("mode radios");
+    let mirror = find(cx, ("sync-mode", 2usize).into()).expect("mode segments");
     cx.simulate_click(mirror.bounds().center(), Default::default());
     draw(cx);
     state.read_with(cx, |state, _| {
@@ -1338,10 +1338,38 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
         assert!(tab.sync.excluded.is_empty(), "a new mode starts from every collection");
     });
     assert!(cx.debug_bounds("compare-sync-totals").is_some());
+    let review = find(cx, "review-sync".into()).expect("Review");
+    assert_eq!(review.label(), Some("Review and sync 2 collections"));
+
+    // Narrow panes wrap the row instead of pushing a control out of view, and the line saying
+    // which side is written stays.
     for width in [700.0, 430.0] {
         cx.simulate_resize(size(px(width), px(1000.0)));
         draw(cx);
+        for control in [
+            gpui_kit::ElementId::from(("sync-target", 1usize)),
+            ("sync-mode", 2usize).into(),
+            "clear-sync-target".into(),
+            "review-sync".into(),
+        ] {
+            let node = find(cx, control.clone()).expect("every control is drawn");
+            assert!(node.bounds().right() <= px(width), "{control:?} fits at {width}");
+        }
+        let direction = cx.debug_bounds("compare-sync-direction").expect("the direction line");
+        assert!(direction.right() <= px(width) && direction.size.width > px(0.0));
     }
+
+    // Nothing ticked: the button carries no count, and the summary says why.
+    state.update(cx, |state, _| {
+        let tab = state.compare_tab_mut(id).unwrap();
+        for index in 0..tab.pairs.len() {
+            tab.sync.toggle_pair(index);
+        }
+        assert!(tab.sync_selected().is_empty());
+    });
+    draw(cx);
+    let review = find(cx, "review-sync".into()).expect("Review");
+    assert_eq!(review.label(), Some("Review and sync"));
 }
 
 #[gpui_kit::test]

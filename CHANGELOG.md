@@ -73,6 +73,7 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 - Escape cancels a drag, and the pipeline stage list, the filter builder and the tab bar scroll when a drag nears their edge
 
 ### Changed
+- Compare's sync panel is one compact row: Sync to Left or Right, the write mode as a segmented control, Cancel and Review. A line below names the side read from and the side written to, with their connection and database, and says what the mode does; Mirror's deletes are called out there. The summary names what the sync writes, or why there's nothing to write, and Review no longer counts zero collections
 - What's New leads with a release's highlights, keeps every other change one click away behind a count, and renders code and lists properly. After an update it opens only when the highlights changed, so a nightly build with the same highlights no longer opens it again
 - Filters are written with spaces inside their braces, `{ _id: ObjectId("…") }`, everywhere one is shown, copied or saved
 - Stop ends a tool call that has already started instead of waiting for it to finish, and the rows it interrupted say so rather than spinning
