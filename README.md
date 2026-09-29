@@ -27,7 +27,7 @@
 </p>
 
 > [!NOTE]
-> **Status:** actively developed and pre-1.0; the current release is 0.3.0. macOS releases are signed and notarized. Windows and Linux ship as nightly builds until the next stable release.
+> **Status:** actively developed and pre-1.0; the current release is 0.4.0. macOS releases are signed and notarized.
 
 ## Why OpenMango
 
