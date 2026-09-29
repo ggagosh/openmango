@@ -602,9 +602,9 @@ impl ConnectionManager {
                         ),
                     )
                     .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
-                        "Runs in your login shell before OpenMango connects, and is stopped when \
-                         you disconnect. Use it for whatever opens the port the URI points at, \
-                         such as kubectl port-forward with mongodb://localhost:27018.",
+                        "Runs in your login shell before OpenMango connects and stops when you \
+                         disconnect. Point the URI at the port it opens, for example \
+                         localhost:27018.",
                     )),
             )
             // Mutual-exclusion warning
