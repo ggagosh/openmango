@@ -5,10 +5,14 @@ use gpui_kit::{App, AppContext as _, Context, Entity, Subscription};
 use uuid::Uuid;
 
 use crate::connection::CancellationToken;
+use crate::connection::ops::compare::Side;
+use crate::connection::ops::compare_database::SyncMode;
 use crate::helpers::background_runner::{self, RunnerStatus};
 use crate::models::{ConnectionEnvironment, SavedConnection};
 use crate::state::compare::{CompareScope, CompareTaskLink};
-use crate::tasks::model::{Approval, FailureKind, Run, RunStatus, RunTrigger, Task, TaskSpec};
+use crate::tasks::model::{
+    Approval, FailureKind, Run, RunStatus, RunTrigger, SyncChoice, Task, TaskSpec,
+};
 use crate::tasks::safety::SafetyLimit;
 use crate::tasks::schedule::Schedule;
 use crate::tasks::store::RunStore;
@@ -94,8 +98,8 @@ pub struct ScheduleSettings {
     pub keep_files: Option<u32>,
     /// Scheduled runs may write to a Production or protected connection.
     pub protected_writes: bool,
-    /// A scheduled run that succeeds says so too.
-    pub notify_success: bool,
+    /// Each scheduled run says when it starts and how it ended, not only problems.
+    pub notify_every_run: bool,
     /// The background runner may start its runs while OpenMango is closed.
     pub run_when_closed: bool,
 }
@@ -169,9 +173,23 @@ pub enum RunStop {
     Token(CancellationToken),
 }
 
-/// The connection's identity, as task approval records it.
-fn identity(connection: &SavedConnection) -> String {
-    crate::actions::connection_identity_hash(connection).unwrap_or_default()
+/// Whether the two specs write the same way: the same kind, into the same connection, and for
+/// a sync, in the same direction and mode.
+fn same_writes(before: &TaskSpec, after: &TaskSpec) -> bool {
+    before.kind() == after.kind()
+        && before.write_connection() == after.write_connection()
+        && before.sync_choice() == after.sync_choice()
+}
+
+/// The connection's identity, as task approval records it: what decides where, and as whom, a
+/// task writes. Version 0 approvals also hashed the keychain entry's id, which changes whenever
+/// the connection is saved, even unchanged.
+fn identity(connection: &SavedConnection, version: u8) -> String {
+    let mut connection = connection.clone();
+    if version >= Approval::VERSION {
+        connection.secret_id = None;
+    }
+    crate::actions::connection_identity_hash(&connection).unwrap_or_default()
 }
 
 impl AppState {
@@ -198,7 +216,13 @@ impl AppState {
         }
         task.updated_at = chrono::Utc::now();
         match self.tasks.tasks.iter_mut().find(|existing| existing.id == task.id) {
-            Some(existing) => *existing = task,
+            Some(existing) => {
+                // Scheduled writes were approved for what the task wrote before.
+                if !same_writes(&existing.spec, &task.spec) {
+                    task.approval = None;
+                }
+                *existing = task;
+            }
             None => self.tasks.tasks.push(task),
         }
         self.save_tasks()
@@ -222,8 +246,8 @@ impl AppState {
 
     /// Sets when the task runs by itself, with its safety limit. A schedule for a task that
     /// writes approves the connections it uses as they are now; `protected_writes` lets its runs
-    /// write to a Production or protected connection. `notify_success`: a scheduled run that
-    /// succeeds says so too.
+    /// write to a Production or protected connection. `notify_every_run`: each scheduled
+    /// run says when it starts and how it ended.
     pub fn set_task_schedule(
         &mut self,
         id: Uuid,
@@ -236,7 +260,7 @@ impl AppState {
         task.schedule = settings.schedule;
         task.safety = settings.safety;
         task.keep_files = settings.keep_files;
-        task.notify_success = settings.notify_success;
+        task.notify_every_run = settings.notify_every_run;
         task.run_when_closed = scheduled && settings.run_when_closed;
         task.paused = false;
         task.paused_by_sign_in = false;
@@ -451,8 +475,34 @@ impl AppState {
         });
     }
 
+    /// A scheduled run of a task that notifies of every run says it started. Its end replaces
+    /// the notification, which is one per task.
+    fn task_run_started(&mut self, run: &Run) {
+        let Some(task) = self.task(run.task_id).filter(|task| task.notify_every_run) else {
+            return;
+        };
+        if !matches!(run.trigger, RunTrigger::Schedule | RunTrigger::CatchUp) {
+            return;
+        }
+        let text = format!("“{}” started.", task.name);
+        self.tasks.notices.push(TaskNotice {
+            task_id: task.id,
+            title: text.trim_end_matches('.').to_string(),
+            body: format!(
+                "{} · {}",
+                if run.trigger == RunTrigger::CatchUp {
+                    "Catching up a missed run"
+                } else {
+                    "On its schedule"
+                },
+                task.spec.subject()
+            ),
+        });
+        self.set_status_message(Some(crate::state::StatusMessage::info(text)));
+    }
+
     /// After a run ends: a failed sign-in pauses the task's schedule, and a scheduled run says
-    /// how it went once per outage, when it works again, and each time when asked to.
+    /// how it went once per outage and when it works again, or every time when asked to.
     fn task_run_ended(&mut self, run: &Run) {
         let Some(mut task) = self.task(run.task_id).cloned() else {
             return;
@@ -477,7 +527,7 @@ impl AppState {
         // The same outage: the run before failed the same way.
         let same_outage =
             previous.is_some_and(|previous| previous.failed() && previous.failure == run.failure);
-        if run.failed() && (!same_outage || paused_now) {
+        if run.failed() && (!same_outage || paused_now || task.notify_every_run) {
             let (title, message) = if paused_now {
                 (
                     format!("“{}” couldn't sign in", task.name),
@@ -497,17 +547,18 @@ impl AppState {
                 super::ErrorAction::OpenTask(task.id),
             );
         } else if run.status == RunStatus::Succeeded {
-            let (text, body) = if previous.is_some_and(Run::failed) {
-                (format!("“{}” works again.", task.name), "Its last scheduled run succeeded.")
-            } else if task.notify_success {
-                (format!("“{}” ran on its schedule.", task.name), "The run succeeded.")
+            let summary = crate::views::tasks::run_summary(task.spec.kind(), run);
+            let text = if previous.is_some_and(Run::failed) {
+                format!("“{}” works again.", task.name)
+            } else if task.notify_every_run {
+                format!("“{}” finished.", task.name)
             } else {
                 return;
             };
             self.tasks.notices.push(TaskNotice {
                 task_id: task.id,
                 title: text.trim_end_matches('.').to_string(),
-                body: body.to_string(),
+                body: summary,
             });
             self.set_status_message(Some(crate::state::StatusMessage::info(text)));
         }
@@ -528,9 +579,9 @@ impl AppState {
             .spec
             .connections()
             .into_iter()
-            .filter_map(|id| Some((id, identity(self.connection_by_id(id)?))))
+            .filter_map(|id| Some((id, identity(self.connection_by_id(id)?, Approval::VERSION))))
             .collect();
-        Approval { connections, protected_writes }
+        Approval { connections, protected_writes, version: Approval::VERSION }
     }
 
     /// The name of the Production or protected connection the task writes to, if it writes to
@@ -553,8 +604,17 @@ impl AppState {
                 return Some("A connection this task uses was deleted.".into());
             };
             let approved = approval.connections.iter().find(|(approved, _)| *approved == id);
-            if approved.is_none_or(|(_, hash)| *hash != identity(connection)) {
-                return Some("Connection settings changed since this task was approved.".into());
+            if approved.is_none_or(|(_, hash)| *hash != identity(connection, approval.version)) {
+                // An approval from before can't tell a changed connection from a resaved one.
+                return Some(
+                    if approval.version < Approval::VERSION {
+                        "This approval is from an earlier OpenMango and can't be checked. Approve \
+                     it once more."
+                    } else {
+                        "Connection settings changed since this task was approved."
+                    }
+                    .into(),
+                );
             }
         }
         if !approval.protected_writes
@@ -612,11 +672,21 @@ impl AppState {
         let ended = persist && !matches!(run.status, RunStatus::Running | RunStatus::Skipped);
         let ended_run = ended.then(|| run.clone());
         let runs = self.tasks.runs.entry(run.task_id).or_default();
-        match runs.iter_mut().find(|existing| existing.id == run.id) {
-            Some(existing) => *existing = run,
-            None => runs.insert(0, run),
-        }
+        let started = match runs.iter_mut().find(|existing| existing.id == run.id) {
+            Some(existing) => {
+                *existing = run;
+                None
+            }
+            None => {
+                let started = (run.status == RunStatus::Running).then(|| run.clone());
+                runs.insert(0, run);
+                started
+            }
+        };
         runs.truncate(crate::tasks::store::RUNS_PER_TASK);
+        if let Some(run) = started {
+            self.task_run_started(&run);
+        }
         if let Some(run) = ended_run {
             self.task_run_ended(&run);
         }
@@ -694,20 +764,72 @@ impl AppState {
         Some(TaskSpec::Transfer { config: tab.config.clone(), options: tab.options.clone() })
     }
 
-    /// What saving this Compare tab as a task would store: a Sync task while the database
-    /// sync list is showing, a comparison otherwise.
-    pub fn compare_task_spec(&self, compare_id: Uuid) -> Option<TaskSpec> {
+    /// What saving the Compare tab starts from: a sync in the sync list's direction and mode
+    /// while it's showing, else in those of the Sync task the tab belongs to, else a
+    /// comparison.
+    pub fn compare_save_choice(&self, compare_id: Uuid) -> SyncChoice {
+        let tab = self.compare_tab(compare_id)?;
+        if self.compare_sync_task_blocked(compare_id).is_some() {
+            return None;
+        }
+        if let Some(target) = tab.sync.target {
+            let mode = match tab.config.scope {
+                CompareScope::Databases => tab.sync.mode,
+                // Two collections: the sync list picks kinds of difference, not a mode.
+                CompareScope::Collections => {
+                    let only_on_target = if target == Side::Right { 1 } else { 0 };
+                    if tab.sync.categories[only_on_target].all {
+                        SyncMode::Mirror
+                    } else if tab.sync.categories[2].all {
+                        SyncMode::AddAndUpdate
+                    } else {
+                        SyncMode::AddMissing
+                    }
+                }
+            };
+            return Some((target, mode));
+        }
+        self.task(tab.task.as_ref()?.id)?.spec.sync_choice()
+    }
+
+    /// Why the Compare tab can't be saved as a sync task, if it can't. A comparison of two
+    /// collections needs a collection on each side, and has to match documents by `_id`, as
+    /// the task's sync does.
+    pub fn compare_sync_task_blocked(&self, compare_id: Uuid) -> Option<String> {
+        let config = &self.compare_tab(compare_id)?.config;
+        if config.scope == CompareScope::Databases {
+            return None;
+        }
+        if config.sides.iter().any(|side| side.collection.is_empty()) {
+            return Some("Pick a collection on each side to sync them.".into());
+        }
+        if !config.fields.is_empty() && config.fields != ["_id"] {
+            return Some(format!(
+                "A sync matches documents by _id, and this comparison matches by {}.",
+                config.fields.join(", ")
+            ));
+        }
+        None
+    }
+
+    /// What saving this Compare tab as a task stores: a comparison, or with `choice` a sync.
+    pub fn compare_task_spec(&self, compare_id: Uuid, choice: SyncChoice) -> Option<TaskSpec> {
         let tab = self.compare_tab(compare_id)?;
         let config = tab.config.clone();
-        match tab.sync.target {
-            Some(target) if config.scope == CompareScope::Databases => Some(TaskSpec::Sync {
-                config,
-                target,
-                mode: tab.sync.mode,
-                excluded: tab.sync_excluded_names(),
-            }),
-            _ => Some(TaskSpec::Compare { config }),
-        }
+        let blocked = self.compare_sync_task_blocked(compare_id).is_some();
+        let Some((target, mode)) = choice.filter(|_| !blocked) else {
+            return Some(TaskSpec::Compare { config });
+        };
+        // The sync list's unticked collections, or with it closed, the task's.
+        let excluded = if tab.sync.target.is_some() {
+            tab.sync_excluded_names()
+        } else {
+            match tab.task.as_ref().and_then(|link| self.task(link.id)).map(|task| &task.spec) {
+                Some(TaskSpec::Sync { excluded, .. }) => excluded.clone(),
+                _ => Vec::new(),
+            }
+        };
+        Some(TaskSpec::Sync { config, target, mode, excluded })
     }
 
     /// The task a Transfer or Compare tab is linked to.
@@ -728,14 +850,21 @@ impl AppState {
                 }
             }
             TabKey::Compare(key) => {
-                let sync = match self.compare_task_spec(key.id) {
+                let sync = match self.task(task_id).map(|task| &task.spec) {
                     Some(TaskSpec::Sync { target, mode, excluded, .. }) => {
-                        Some((target, mode, excluded))
+                        Some((*target, *mode, excluded.clone()))
                     }
                     _ => None,
                 };
                 if let Some(state) = self.compare_tab_mut(key.id) {
+                    // The sync list shows what was saved: the task's sync, or none.
+                    let syncs = sync.is_some();
                     state.task = Some(CompareTaskLink { id: task_id, sync });
+                    if syncs {
+                        state.apply_task_sync();
+                    } else {
+                        state.sync.clear_target();
+                    }
                 }
             }
             _ => {}

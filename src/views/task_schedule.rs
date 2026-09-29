@@ -80,7 +80,7 @@ pub struct ScheduleEditor {
     days: Vec<Weekday>,
     weekdays_only: bool,
     keep_files: bool,
-    notify_success: bool,
+    notify_every_run: bool,
     run_when_closed: bool,
     /// The system entry that starts tasks while OpenMango is closed, as last seen.
     runner: RunnerStatus,
@@ -154,7 +154,7 @@ impl ScheduleEditor {
             days,
             weekdays_only,
             keep_files: task.keep_files.is_some(),
-            notify_success: task.notify_success,
+            notify_every_run: task.notify_every_run,
             run_when_closed: task.run_when_closed,
             // Asked here, since the app only asks at launch when a task uses it.
             runner: crate::helpers::background_runner::status(),
@@ -264,7 +264,7 @@ impl ScheduleEditor {
         }
         let keep_files = (self.keep_files && self.stamped_export().is_some()).then_some(KEEP_FILES);
         let protected_writes = self.protected_writes;
-        let notify_success = self.notify_success;
+        let notify_every_run = self.notify_every_run;
         let run_when_closed = self.run_when_closed;
         let apply = {
             let (state, id, name) = (self.state.clone(), self.task.id, self.task.name.clone());
@@ -277,7 +277,7 @@ impl ScheduleEditor {
                         safety,
                         keep_files,
                         protected_writes,
-                        notify_success,
+                        notify_every_run,
                         run_when_closed,
                     };
                     let result = app.set_task_schedule(id, settings);
@@ -705,15 +705,15 @@ impl Render for ScheduleEditor {
                 let editor = editor
                     .child(self.render_next(&schedule, cx))
                     .child(
-                        Checkbox::new("schedule-notify-success")
-                            .label("Also notify when a scheduled run succeeds")
-                            .checked(self.notify_success)
+                        Checkbox::new("schedule-notify-every-run")
+                            .label("Notify when each scheduled run starts and ends")
+                            .checked(self.notify_every_run)
                             .on_click(cx.listener(|editor, checked: &bool, _, cx| {
-                                editor.notify_success = *checked;
+                                editor.notify_every_run = *checked;
                                 cx.notify();
                             })),
                     )
-                    .when(cfg!(target_os = "macos"), |editor| editor.child(self.render_closed(cx)));
+                    .child(self.render_closed(cx));
                 match &export {
                     Some(path) => editor.child(self.render_export(path, &schedule, cx)),
                     None => editor,

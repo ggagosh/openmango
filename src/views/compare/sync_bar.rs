@@ -1,8 +1,8 @@
 use gpui_kit::base::CheckboxState;
+use gpui_kit::component::button::ButtonGroup;
 use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::radio::Radio;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Selectable as _, Size};
 
 use super::database::database_label;
 use super::*;
@@ -34,6 +34,75 @@ fn collections(count: usize) -> String {
     format!("{} collection{}", format_number(count as u64), if count == 1 { "" } else { "s" })
 }
 
+/// "Read from ● Left … → Write to ● Right …": which side the documents come from and which
+/// one is written, and for databases what the mode does. The side written stands out.
+fn render_sync_direction(
+    app: &AppState,
+    tab: &CompareTabState,
+    target: Side,
+    cx: &Context<CompareView>,
+) -> Div {
+    let theme = cx.theme();
+    let (muted, foreground) = (theme.muted_foreground, theme.foreground);
+    let config = tab.results_config();
+    let databases = databases(tab);
+    let into = if target == Side::Left { 0 } else { 1 };
+    let side = |index: usize, verb: &'static str| {
+        let written = index == into;
+        let place = if databases {
+            database_label(app, &config.sides[index])
+        } else {
+            endpoint_label(app, &config.sides[index])
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(spacing::xs())
+            .min_w_0()
+            .child(div().flex_none().child(verb))
+            .child(dot(side_color(index, cx)))
+            .child(
+                div()
+                    .flex_none()
+                    .when(written, |name| {
+                        name.text_color(foreground).font_weight(FontWeight::MEDIUM)
+                    })
+                    .child(side_name(index)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .when(written, |path| path.text_color(foreground))
+                    .child(format!("· {place}")),
+            )
+    };
+    let mut line = div()
+        .debug_selector(|| "compare-sync-direction".into())
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_x(spacing::sm())
+        .gap_y(spacing::xs())
+        .min_w_0()
+        .text_xs()
+        .text_color(muted)
+        .child(side(1 - into, "Read from"))
+        .child(Icon::new(IconName::ArrowRight).xsmall().text_color(muted))
+        .child(side(into, "Write to"));
+    if databases {
+        let mode = tab.sync.mode;
+        // Mirror deletes: say so where the mode is chosen, before Review.
+        line = line.child(
+            div()
+                .ml_auto()
+                .when(mode == SyncMode::Mirror, |note| note.text_color(theme.warning))
+                .child(mode.note()),
+        );
+    }
+    line
+}
+
 impl CompareView {
     /// Footer: pick the collection to change, choose what to write, review. Then the run's
     /// outcome with undo.
@@ -63,6 +132,7 @@ impl CompareView {
         } else {
             bar = bar.child(self.render_sync_targets(id, app, tab, cx));
             if let Some(target) = sync.target {
+                bar = bar.child(render_sync_direction(app, tab, target, cx));
                 bar = bar.child(if databases(tab) {
                     self.render_sync_modes(id, app, tab, target, cx)
                 } else {
@@ -76,7 +146,8 @@ impl CompareView {
         bar.into_any_element()
     }
 
-    /// "Sync to" with one radio per side. Right of it: a hint, or Cancel and Review.
+    /// The primary row: "Sync to" Left or Right, for databases "Write" and a mode, then Cancel
+    /// and Review. Before a side is picked, a hint instead of the actions.
     fn render_sync_targets(
         &self,
         id: Uuid,
@@ -89,156 +160,164 @@ impl CompareView {
         let databases = databases(tab);
         let finished = if databases { tab.pair_elapsed.is_some() } else { tab.summary.is_some() };
         let pending = tab.busy() || !finished;
-        let mut choices = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_x(spacing::lg())
-            .gap_y(spacing::xs())
-            .min_w_0()
-            .child(
-                div().text_xs().font_weight(FontWeight::MEDIUM).text_color(muted).child("Sync to"),
-            );
-        for (index, target) in [Side::Left, Side::Right].into_iter().enumerate() {
-            let endpoint = &tab.results_config().sides[index];
-            let reason =
-                if pending { None } else { app.compare_sync_target_disabled_reason(id, index) };
-            let disabled = pending || reason.is_some();
-            let state = self.state.clone();
-            let choose = move |cx: &mut App| {
-                state.update(cx, |app, cx| {
-                    if let Some(tab) = app.compare_tab_mut(id) {
-                        tab.sync.set_target(target);
-                    }
-                    cx.notify();
-                })
-            };
-            let radio_choose = choose.clone();
-            let path = if databases {
-                database_label(app, endpoint)
-            } else {
-                endpoint_label(app, endpoint)
-            };
-            let mut option = div()
-                .id(("sync-target-option", index))
+        let config = tab.results_config();
+        let field = |label: &'static str, control: AnyElement| {
+            div()
                 .flex()
                 .items_center()
                 .gap(spacing::sm())
-                .when(!disabled, |option| {
-                    option.cursor_pointer().on_click(move |_, _, cx| choose(cx))
-                })
+                .flex_none()
                 .child(
-                    Radio::new(("sync-target", index))
-                        .checked(sync.target == Some(target))
-                        .disabled(disabled)
-                        .accessibility_label(format!("{} · {path}", side_name(index)))
-                        .on_click(move |_, _, cx| radio_choose(cx)),
+                    div().text_xs().font_weight(FontWeight::MEDIUM).text_color(muted).child(label),
                 )
-                .child(dot(side_color(index, cx)))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .when(disabled, |name| name.text_color(muted))
-                        .child(side_name(index)),
-                )
-                .child(div().text_xs().text_color(muted).truncate().max_w(px(360.0)).child(path));
-            if let Some(reason) = reason {
-                option = option
-                    .tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx));
-            }
-            choices = choices.child(option);
-        }
-
-        let trailing: AnyElement = match sync.target {
-            None => div()
-                .text_xs()
-                .text_color(muted)
-                .child(if pending {
-                    "Available when the comparison finishes."
-                } else if databases {
-                    "Pick the database that receives the changes."
-                } else {
-                    "Pick the collection that receives the changes."
-                })
-                .into_any_element(),
-            Some(_) => {
-                let total: usize = if databases {
-                    tab.sync_selected().len()
-                } else {
-                    (0..4)
-                        .map(|category| {
-                            sync.categories[category].count(tab.segments[category + 1].len())
-                        })
-                        .sum()
-                };
-                let reason = app.compare_sync_disabled_reason(id, false);
-                let clear_state = self.state.clone();
-                let review_state = self.state.clone();
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .flex_shrink_0()
-                    .child(
-                        Button::new("clear-sync-target")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Close)
-                            .label("Cancel")
-                            .tooltip("Leave sync mode (Esc)")
-                            .on_click(move |_, _, cx| {
-                                clear_state.update(cx, |app, cx| {
-                                    if let Some(tab) = app.compare_tab_mut(id) {
-                                        tab.sync.clear_target();
-                                    }
-                                    cx.notify();
-                                })
-                            }),
-                    )
-                    .child(
-                        Button::new("review-sync")
-                            .small()
-                            .primary()
-                            .icon(app_icon("refresh-ccw-dot"))
-                            .label(if databases {
-                                format!("Review and sync {}", collections(total))
-                            } else {
-                                format!("Review and sync {}", format_number(total as u64))
-                            })
-                            .disabled(total == 0 || reason.is_some())
-                            .on_click(move |_, window, cx| {
-                                if databases {
-                                    AppCommands::review_database_sync(
-                                        review_state.clone(),
-                                        id,
-                                        false,
-                                        window,
-                                        cx,
-                                    )
-                                } else {
-                                    AppCommands::review_compare_sync(
-                                        review_state.clone(),
-                                        id,
-                                        false,
-                                        window,
-                                        cx,
-                                    )
-                                }
-                            }),
-                    )
-                    .into_any_element()
-            }
+                .child(control)
         };
-        div()
+
+        let mut sides = ButtonGroup::new("sync-targets").compact();
+        for (index, target) in [Side::Left, Side::Right].into_iter().enumerate() {
+            let reason =
+                if pending { None } else { app.compare_sync_target_disabled_reason(id, index) };
+            let path = if databases {
+                database_label(app, &config.sides[index])
+            } else {
+                endpoint_label(app, &config.sides[index])
+            };
+            let mut side = Button::new(("sync-target", index))
+                .with_size(Size::Small)
+                .selected(sync.target == Some(target))
+                .disabled(pending || reason.is_some())
+                .accessibility_label(format!("Sync to {} · {path}", side_name(index)))
+                .child(dot(side_color(index, cx)))
+                .child(side_name(index));
+            if let Some(reason) = reason {
+                side = side.tooltip(reason);
+            }
+            sides = sides.child(side);
+        }
+        let state = self.state.clone();
+        let sides = sides.on_click(move |selection: &Vec<usize>, _, cx| {
+            // A greyed-out side reports the current choice, or none.
+            let Some(&index) = selection.first() else {
+                return;
+            };
+            state.update(cx, |app, cx| {
+                if let Some(tab) = app.compare_tab_mut(id) {
+                    tab.sync.set_target(if index == 0 { Side::Left } else { Side::Right });
+                }
+                cx.notify();
+            })
+        });
+        let mut row = div()
             .flex()
             .flex_wrap()
             .items_center()
-            .justify_between()
             .gap_x(spacing::lg())
-            .gap_y(spacing::xs())
-            .child(choices)
-            .child(trailing)
+            .gap_y(spacing::sm())
+            .min_w_0()
+            .child(field("Sync to", sides.into_any_element()));
+
+        let Some(_) = sync.target else {
+            let hint = if pending {
+                "Available when the comparison finishes."
+            } else {
+                "Pick the side that receives the changes."
+            };
+            return row.child(div().ml_auto().text_xs().text_color(muted).child(hint));
+        };
+
+        if databases {
+            let state = self.state.clone();
+            let modes = ButtonGroup::new("sync-modes")
+                .compact()
+                .children(SyncMode::ALL.into_iter().enumerate().map(|(index, mode)| {
+                    Button::new(("sync-mode", index))
+                        .with_size(Size::Small)
+                        .label(mode.label())
+                        .selected(sync.mode == mode)
+                }))
+                .on_click(move |selection: &Vec<usize>, _, cx| {
+                    let Some(&index) = selection.first() else {
+                        return;
+                    };
+                    state.update(cx, |app, cx| {
+                        if let Some(tab) = app.compare_tab_mut(id) {
+                            tab.sync.set_mode(SyncMode::ALL[index]);
+                        }
+                        cx.notify();
+                    })
+                });
+            row = row.child(field("Write", modes.into_any_element()));
+        }
+
+        let total: usize = if databases {
+            tab.sync_selected().len()
+        } else {
+            (0..4)
+                .map(|category| sync.categories[category].count(tab.segments[category + 1].len()))
+                .sum()
+        };
+        let reason = app.compare_sync_disabled_reason(id, false);
+        let clear_state = self.state.clone();
+        let review_state = self.state.clone();
+        // No count on the button when there's nothing to write; the summary says why.
+        let review = match (total, databases) {
+            (0, _) => "Review and sync".to_string(),
+            (total, true) => format!("Review and sync {}", collections(total)),
+            (total, false) => format!(
+                "Review and sync {} document{}",
+                format_number(total as u64),
+                if total == 1 { "" } else { "s" }
+            ),
+        };
+        row.child(
+            div()
+                .ml_auto()
+                .flex()
+                .items_center()
+                .gap(spacing::sm())
+                .flex_none()
+                .child(
+                    Button::new("clear-sync-target")
+                        .ghost()
+                        .small()
+                        .label("Cancel")
+                        .tooltip("Leave sync mode (Esc)")
+                        .on_click(move |_, _, cx| {
+                            clear_state.update(cx, |app, cx| {
+                                if let Some(tab) = app.compare_tab_mut(id) {
+                                    tab.sync.clear_target();
+                                }
+                                cx.notify();
+                            })
+                        }),
+                )
+                .child(
+                    Button::new("review-sync")
+                        .small()
+                        .primary()
+                        .label(review)
+                        .disabled(total == 0 || reason.is_some())
+                        .on_click(move |_, window, cx| {
+                            if databases {
+                                AppCommands::review_database_sync(
+                                    review_state.clone(),
+                                    id,
+                                    false,
+                                    window,
+                                    cx,
+                                )
+                            } else {
+                                AppCommands::review_compare_sync(
+                                    review_state.clone(),
+                                    id,
+                                    false,
+                                    window,
+                                    cx,
+                                )
+                            }
+                        }),
+                ),
+        )
     }
 
     /// What the sync would do to the target, one checkbox per operation, deletes last.
@@ -284,6 +363,23 @@ impl CompareView {
             .gap_x(spacing::lg())
             .gap_y(spacing::xs())
             .min_w_0();
+        // No checkbox to show: say why there's nothing to write.
+        if entries.iter().all(|(category, ..)| tab.segments[category + 1].is_empty()) {
+            row = row.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div().text_sm().font_weight(FontWeight::MEDIUM).child("Nothing to write"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("No documents differ between the two collections."),
+                    ),
+            );
+        }
         for (category, operation, noun) in entries {
             let count = tab.segments[category + 1].len();
             if count == 0 {
@@ -343,7 +439,7 @@ impl CompareView {
         row
     }
 
-    /// Database scope: what the sync writes, as one of three modes, and its totals.
+    /// Database scope: what the sync would write, or why nothing, and what it leaves alone.
     fn render_sync_modes(
         &self,
         id: Uuid,
@@ -354,45 +450,8 @@ impl CompareView {
     ) -> Div {
         let muted = cx.theme().muted_foreground;
         let mode = tab.sync.mode;
-        let mut modes = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_x(spacing::lg())
-            .gap_y(spacing::xs())
-            .min_w_0()
-            .child(
-                div().text_xs().font_weight(FontWeight::MEDIUM).text_color(muted).child("Write"),
-            );
-        for (index, option) in SyncMode::ALL.into_iter().enumerate() {
-            let state = self.state.clone();
-            let choose = move |cx: &mut App| {
-                state.update(cx, |app, cx| {
-                    if let Some(tab) = app.compare_tab_mut(id) {
-                        tab.sync.set_mode(option);
-                    }
-                    cx.notify();
-                })
-            };
-            let radio_choose = choose.clone();
-            modes = modes.child(
-                div()
-                    .id(("sync-mode-option", index))
-                    .flex()
-                    .items_center()
-                    .gap(spacing::sm())
-                    .cursor_pointer()
-                    .on_click(move |_, _, cx| choose(cx))
-                    .child(
-                        Radio::new(("sync-mode", index))
-                            .checked(mode == option)
-                            .accessibility_label(option.label())
-                            .on_click(move |_, _, cx| radio_choose(cx)),
-                    )
-                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(option.label())),
-            );
-        }
-
+        let index = if target == Side::Left { 0 } else { 1 };
+        let receiver = side_name(index);
         let selected = tab.sync_selected();
         let mut writes = [0u64; 3];
         for candidate in &selected {
@@ -401,38 +460,79 @@ impl CompareView {
             }
         }
         let estimated = selected.iter().any(|c| c.create);
-        let into =
-            tab.results_config().sides[if target == Side::Left { 0 } else { 1 }].database.clone();
-        let totals = if tab.sync_candidates().is_empty() {
-            "Nothing to write in this mode.".to_string()
+        let (headline, detail) = if tab.sync_candidates().is_empty() {
+            let lacks = match mode {
+                SyncMode::AddMissing => "missing",
+                SyncMode::AddAndUpdate => "missing or changed",
+                SyncMode::Mirror => "missing, changed or extra",
+            };
+            (
+                "Nothing to write".to_string(),
+                format!("{receiver} has no {lacks} documents in the compared collections."),
+            )
+        } else if selected.is_empty() {
+            (
+                "No collections ticked".to_string(),
+                "Tick the collections to sync in the list above.".to_string(),
+            )
         } else {
-            format!(
-                "{} in {into}: {}",
-                collections(selected.len()),
-                writes_text(writes, mode, estimated)
+            (
+                writes_text(writes, mode, estimated).replacen("insert", "Insert", 1),
+                format!(
+                    "{} in {}",
+                    collections(selected.len()),
+                    tab.results_config().sides[index].database
+                ),
             )
         };
-        let mut notes = vec![
-            match mode {
-                SyncMode::AddMissing => {
-                    "Inserts documents the target lacks. Existing documents are left alone."
-                }
-                SyncMode::AddAndUpdate => "Also replaces documents that differ. Nothing is deleted.",
-                SyncMode::Mirror => "Also deletes documents only the target has.",
-            }
-            .to_string(),
-            "Collections only on the target, views, time-series and minor differences are left alone.".into(),
-        ];
-        if let Some(reason) = app.compare_sync_disabled_reason(id, false) {
-            notes.push(reason);
-        }
+        let unchanged = "Collections only on the target, views, time-series and minor differences are left alone.";
         div()
             .flex()
-            .flex_col()
-            .gap(spacing::xs())
-            .child(modes)
-            .child(div().debug_selector(|| "compare-sync-totals".into()).text_sm().child(totals))
-            .children(notes.into_iter().map(|text| div().text_xs().text_color(muted).child(text)))
+            .flex_wrap()
+            .items_start()
+            .justify_between()
+            .gap_x(spacing::lg())
+            .gap_y(spacing::xs())
+            .child(
+                // Takes the row's free space: sized to its text, it can squeeze to a letter.
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .debug_selector(|| "compare-sync-totals".into())
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(headline),
+                    )
+                    .child(div().text_xs().text_color(muted).child(detail))
+                    .children(
+                        app.compare_sync_disabled_reason(id, false)
+                            .map(|reason| div().text_xs().text_color(muted).child(reason)),
+                    ),
+            )
+            .child(
+                // Opens above, like a disclosure: this sits at the bottom of the window.
+                div().flex_none().child(
+                    gpui_kit::component::popover::Popover::new("sync-unchanged-popover")
+                        .anchor(Anchor::BottomRight)
+                        .trigger(
+                            Button::new("sync-unchanged")
+                                .ghost()
+                                .xsmall()
+                                .label("What stays unchanged?"),
+                        )
+                        .content(move |_, _, _| {
+                            div()
+                                .debug_selector(|| "compare-sync-unchanged".into())
+                                .max_w(px(320.0))
+                                .text_sm()
+                                .child(unchanged)
+                        }),
+                ),
+            )
     }
 
     /// The run's result line: what was written, then Undo and Compare again.

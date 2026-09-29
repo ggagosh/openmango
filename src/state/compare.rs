@@ -613,6 +613,7 @@ impl CompareTabState {
                 self.summary = Some(summary);
                 self.running = false;
                 self.cancellation = None;
+                self.apply_task_sync();
             }
             CompareMessage::Failed(error) => {
                 self.error = Some(error);
@@ -688,13 +689,25 @@ pub struct CompareTaskLink {
 
 impl CompareTabState {
     /// Puts a Sync task's choices back: its direction, its mode, and its collections unticked.
-    fn apply_task_sync(&mut self) {
+    pub(crate) fn apply_task_sync(&mut self) {
         let Some((target, mode, excluded)) = self.task.as_ref().and_then(|task| task.sync.clone())
         else {
             return;
         };
         self.sync.set_target(target);
         self.sync.set_mode(mode);
+        // Two collections: the sync list picks kinds of difference, so pick the mode's.
+        if self.config.scope == CompareScope::Collections {
+            let kinds = mode.kinds(target);
+            for (selection, kind) in self.sync.categories.iter_mut().zip([
+                DiffKind::OnlyLeft,
+                DiffKind::OnlyRight,
+                DiffKind::Different,
+                DiffKind::Minor,
+            ]) {
+                selection.set_all(kinds.contains(&kind));
+            }
+        }
         self.sync.excluded = self
             .pairs
             .iter()

@@ -662,6 +662,7 @@ impl AppCommands {
                             restore_dir: directory,
                             pass_rows: MAX_ROWS,
                             deletes_only: false,
+                            named: None,
                         },
                         cancellation,
                         sender,

@@ -439,7 +439,8 @@ mod database {
     use super::*;
     use openmango::bson::compare::IgnoreSet;
     use openmango::connection::ops::compare_database::{
-        DatabaseSync, PairSync, PairSyncMessage, SyncMode, sync_pairs_async, undo_pairs_async,
+        DatabaseSync, NamedPair, PairSync, PairSyncMessage, SyncMode, sync_pairs_async,
+        undo_pairs_async,
     };
 
     type Logs = Vec<(usize, String, Arc<RestoreHandle>)>;
@@ -466,6 +467,7 @@ mod database {
                     restore_dir: directory.to_path_buf(),
                     pass_rows,
                     deletes_only: false,
+                    named: None,
                 },
                 CancellationToken::new(),
                 sender,
@@ -504,6 +506,71 @@ mod database {
                 panic!("{error}");
             }
         }
+    }
+
+    /// Two collections compared rather than two databases, as a task saved from a comparison of
+    /// two collections: each side under its own name, and only what the filter matches.
+    #[tokio::test]
+    async fn a_named_pair_syncs_two_collections_under_their_own_names_within_its_filter() {
+        let (_container, client) = server("8.2.3").await;
+        let from = client.database("source").collection::<Document>("orders");
+        let into = client.database("target").collection::<Document>("orders_copy");
+        from.insert_many([
+            doc! {"_id": 1, "status": "open", "n": 1},
+            doc! {"_id": 2, "status": "open", "n": 2},
+            doc! {"_id": 3, "status": "closed", "n": 3},
+        ])
+        .await
+        .unwrap();
+        into.insert_many([
+            doc! {"_id": 2, "status": "open", "n": 20},
+            doc! {"_id": 4, "status": "open", "n": 4},
+            doc! {"_id": 5, "status": "closed", "n": 5},
+        ])
+        .await
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        let (result, messages) = tokio::join!(
+            sync_pairs_async(
+                DatabaseSync {
+                    clients: [client.clone(), client.clone()],
+                    databases: ["source".into(), "target".into()],
+                    target: Side::Right,
+                    mode: SyncMode::Mirror,
+                    pairs: vec![PairSync { index: 0, name: "orders_copy".into(), create: false }],
+                    ignore: IgnoreSet::default(),
+                    restore_dir: directory.path().to_path_buf(),
+                    pass_rows: 100,
+                    deletes_only: false,
+                    named: Some(NamedPair {
+                        collections: ["orders".into(), "orders_copy".into()],
+                        filter: doc! {"status": "open"},
+                    }),
+                },
+                CancellationToken::new(),
+                sender,
+            ),
+            receiver.collect::<Vec<_>>()
+        );
+        result.unwrap();
+        let summary = messages
+            .into_iter()
+            .find_map(|message| match message {
+                PairSyncMessage::Done(_, summary) => Some(summary),
+                PairSyncMessage::Failed(_, error) => panic!("{error}"),
+                _ => None,
+            })
+            .expect("the pair finished");
+        assert_eq!((summary.inserted, summary.replaced, summary.deleted), (1, 1, 1));
+        // 1 added, 2 replaced, 4 deleted; 3 and 5 are outside the filter and left alone.
+        let documents: Vec<Document> =
+            into.find(doc! {}).sort(doc! {"_id": 1}).await.unwrap().try_collect().await.unwrap();
+        let ids: Vec<i32> = documents.iter().map(|d| d.get_i32("_id").unwrap()).collect();
+        assert_eq!(ids, [1, 2, 5]);
+        assert_eq!(documents[1].get_i32("n").unwrap(), 2);
+        let names = client.database("target").list_collection_names().await.unwrap();
+        assert_eq!(names, ["orders_copy"], "nothing written under the source's name");
     }
 
     #[tokio::test]

@@ -268,7 +268,8 @@ impl AppCommands {
             return;
         };
         let (sender, mut receiver) = futures::channel::mpsc::unbounded();
-        let task = runtime.spawn(compare_pairs_async(clients, databases, scans, ignore, sender));
+        let task =
+            runtime.spawn(compare_pairs_async(clients, databases, scans, ignore, None, sender));
         cx.spawn(async move |cx| {
             while let Some(message) = receiver.next().await {
                 cx.update(|cx| {

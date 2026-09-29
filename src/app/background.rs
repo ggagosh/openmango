@@ -82,13 +82,21 @@ pub fn run_due_tasks() {
                         state.update(cx, |app, _| app.attach_task_runs(store, None));
                         AppCommands::check_schedules(&state, Utc::now(), cx);
                     });
-                    // Runs go one at a time; the queue empties as each one ends.
-                    while !cx.update(|cx| idle(&state, cx)) {
+                    // Runs go one at a time; the queue empties as each one ends. Notices go out
+                    // as runs start and end. No Open task button: this process has exited by the
+                    // time someone clicks. Clicking the notification still opens OpenMango on
+                    // macOS.
+                    let mut posted = false;
+                    loop {
+                        let idle = cx.update(|cx| idle(&state, cx));
+                        posted |=
+                            cx.update(|cx| AppState::post_task_notices(&state, false, false, cx));
+                        if idle {
+                            break;
+                        }
                         cx.background_executor().timer(Duration::from_secs(1)).await;
                     }
-                    // No Open task button: this process has exited by the time someone clicks.
-                    // Clicking the notification still opens OpenMango on macOS.
-                    if cx.update(|cx| AppState::post_task_notices(&state, false, false, cx)) {
+                    if posted {
                         // macOS takes the notification after the call returns.
                         cx.background_executor().timer(Duration::from_secs(2)).await;
                     }

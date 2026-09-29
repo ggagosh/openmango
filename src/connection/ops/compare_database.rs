@@ -189,11 +189,14 @@ pub struct PairScan {
 /// Pass two: the collection comparison, once per collection, one at a time, in the order given.
 /// Differences are counted and never stored. A collection whose token is cancelled before its
 /// turn is passed over without a message; cancelling every token stops the run.
+/// `named`: one pair of collections with names of their own and a filter, as a comparison of
+/// two collections saved as a sync task has; the scans' names are then only labels.
 pub async fn compare_pairs_async(
     clients: [Client; 2],
     databases: [String; 2],
     scans: Vec<PairScan>,
     ignore: IgnoreSet,
+    named: Option<NamedPair>,
     sender: UnboundedSender<PairMessage>,
 ) {
     for PairScan { index, name, cancellation } in scans {
@@ -204,12 +207,13 @@ pub async fn compare_pairs_async(
             continue;
         }
         let _ = sender.unbounded_send(PairMessage::Started(index));
+        let (names, filter) = named_or(&named, &name);
         let [left, right] = [0, 1].map(|side| {
-            clients[side].database(&databases[side]).collection::<RawDocumentBuf>(&name)
+            clients[side].database(&databases[side]).collection::<RawDocumentBuf>(&names[side])
         });
         let options = CompareOptions {
             fields: vec!["_id".into()],
-            filter: Document::new(),
+            filter,
             ignore: ignore.clone(),
             row_limit: 0,
             row_kinds: None,
@@ -277,6 +281,17 @@ impl SyncMode {
         }
     }
 
+    /// What the mode writes, in the order the modes are offered, each building on the last.
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::AddMissing => {
+                "Inserts documents the target lacks. Existing documents are left alone."
+            }
+            Self::AddAndUpdate => "Also replaces documents that differ. Nothing is deleted.",
+            Self::Mirror => "Also deletes documents only the target has.",
+        }
+    }
+
     /// The difference kinds this mode writes when `target` receives the changes.
     pub fn kinds(self, target: Side) -> Vec<DiffKind> {
         let (missing, extra) = match target {
@@ -301,6 +316,23 @@ impl SyncMode {
             Self::AddAndUpdate => [missing, counts.different, 0],
             Self::Mirror => [missing, counts.different, extra],
         }
+    }
+}
+
+/// Two collections compared or synced under names of their own, only the documents `filter`
+/// matches: a comparison of two collections rather than two databases.
+#[derive(Clone, Debug, Default)]
+pub struct NamedPair {
+    pub collections: [String; 2],
+    pub filter: Document,
+}
+
+/// The collection names to open on each side, and the filter: the named pair's, or `name` on
+/// both sides and every document.
+fn named_or(named: &Option<NamedPair>, name: &str) -> ([String; 2], Document) {
+    match named {
+        Some(pair) => (pair.collections.clone(), pair.filter.clone()),
+        None => ([name.to_string(), name.to_string()], Document::new()),
     }
 }
 
@@ -334,6 +366,8 @@ pub struct DatabaseSync {
     /// Write only the deletes the mode makes. A Mirror run as Add and update, then as this,
     /// deletes only after everything else is written.
     pub deletes_only: bool,
+    /// Two collections under names of their own, instead of each pair's name on both sides.
+    pub named: Option<NamedPair>,
 }
 
 /// Runs a database sync one collection at a time. Each collection is scanned for the kinds the
@@ -354,6 +388,7 @@ pub async fn sync_pairs_async(
         restore_dir,
         pass_rows,
         deletes_only,
+        named,
     } = sync;
     let mut kinds = mode.kinds(target);
     if deletes_only {
@@ -370,12 +405,14 @@ pub async fn sync_pairs_async(
         if cancellation.is_cancelled() || sender.is_closed() {
             break;
         }
+        let (names, filter) = named_or(&named, &pair.name);
         let [left, right] = [0, 1].map(|side| {
-            clients[side].database(&databases[side]).collection::<RawDocumentBuf>(&pair.name)
+            clients[side].database(&databases[side]).collection::<RawDocumentBuf>(&names[side])
         });
         let run = SyncPass {
             target,
             kinds: kinds.clone(),
+            filter: &filter,
             ignore: &ignore,
             pass_rows,
             cancellation: &cancellation,
@@ -392,6 +429,7 @@ pub async fn sync_pairs_async(
 struct SyncPass<'a> {
     target: Side,
     kinds: Vec<DiffKind>,
+    filter: &'a Document,
     ignore: &'a IgnoreSet,
     pass_rows: usize,
     cancellation: &'a CancellationToken,
@@ -422,7 +460,7 @@ impl SyncPass<'_> {
         loop {
             let options = CompareOptions {
                 fields: vec!["_id".into()],
-                filter: Document::new(),
+                filter: self.filter.clone(),
                 ignore: self.ignore.clone(),
                 row_limit: self.pass_rows,
                 row_kinds: Some(self.kinds.clone()),

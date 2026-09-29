@@ -32,9 +32,9 @@ pub struct Task {
     /// resumed. Trying a wrong password again can lock the account.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub paused_by_sign_in: bool,
-    /// A scheduled run that succeeds says so too, not only one that fails.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub notify_success: bool,
+    /// Each scheduled run says when it starts and how it ended, not only problems.
+    #[serde(default, alias = "notify_success", skip_serializing_if = "std::ops::Not::not")]
+    pub notify_every_run: bool,
     /// The background runner starts its scheduled runs while OpenMango is closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub run_when_closed: bool,
@@ -60,6 +60,14 @@ pub struct Approval {
     pub connections: Vec<(Uuid, String)>,
     /// Scheduled runs may write to a Production or protected connection.
     pub protected_writes: bool,
+    /// How the hashes were made: 0 with the connection's keychain entry id, which any save
+    /// changes, 1 without it.
+    #[serde(default)]
+    pub version: u8,
+}
+
+impl Approval {
+    pub const VERSION: u8 = 1;
 }
 
 impl Task {
@@ -74,7 +82,7 @@ impl Task {
             schedule: Schedule::Manual,
             paused: false,
             paused_by_sign_in: false,
-            notify_success: false,
+            notify_every_run: false,
             run_when_closed: false,
             schedule_from: None,
             approval: None,
@@ -191,12 +199,62 @@ impl TaskSpec {
                 }
             }
             Self::Sync { config, target, mode, .. } => {
-                let [left, right] = config.sides.each_ref().map(|side| side.database.as_str());
+                let [left, right] = config.sides.each_ref().map(|side| match config.scope {
+                    CompareScope::Collections => pick(&side.collection, &side.database),
+                    CompareScope::Databases => side.database.clone(),
+                });
                 let (source, destination) =
                     if *target == Side::Right { (left, right) } else { (right, left) };
                 format!("{} {source} to {destination}", mode.label())
             }
         }
+    }
+
+    /// How a Sync task writes: into which side, in which mode. `None` for other tasks.
+    pub fn sync_choice(&self) -> SyncChoice {
+        match self {
+            Self::Sync { target, mode, .. } => Some((*target, *mode)),
+            _ => None,
+        }
+    }
+
+    /// What each run of a comparison or sync does, as a sentence. `connection` names a
+    /// connection, to tell apart two sides with the same name.
+    pub fn sentence(&self, connection: impl Fn(Uuid) -> Option<String>) -> Option<String> {
+        let (Self::Compare { config } | Self::Sync { config, .. }) = self else {
+            return None;
+        };
+        let mut sides = compare_sides(config);
+        if sides[0] == sides[1] {
+            for (side, endpoint) in sides.iter_mut().zip(&config.sides) {
+                if let Some(name) = endpoint.connection_id.and_then(&connection) {
+                    *side = format!("{side} on {name}");
+                }
+            }
+        }
+        let [left, right] = &sides;
+        let filtered =
+            config.scope == CompareScope::Collections && !config.filter.trim().is_empty();
+        let only = if filtered { " Only documents the filter matches take part." } else { "" };
+        Some(match self {
+            Self::Sync { target, mode, .. } => {
+                let into = if *target == Side::Right { right } else { left };
+                let writes = match mode {
+                    SyncMode::AddMissing => format!("adds the documents {into} lacks"),
+                    SyncMode::AddAndUpdate => {
+                        format!("adds the documents {into} lacks and replaces those that differ")
+                    }
+                    SyncMode::Mirror => format!(
+                        "makes {into} match it: adds missing documents, replaces those that \
+                         differ, and deletes those only {into} has"
+                    ),
+                };
+                format!("Compares {left} with {right}, then {writes}.{only}")
+            }
+            _ => format!(
+                "Compares {left} with {right} and reports what differs. Writes nothing.{only}"
+            ),
+        })
     }
 
     /// One line saying what the task works on, e.g. "shop.orders → local/shop.orders".
@@ -235,6 +293,9 @@ pub fn side_index(side: Side) -> usize {
         Side::Right => 1,
     }
 }
+
+/// A comparison saved as a task: `None` compares only, else it syncs into a side in a mode.
+pub type SyncChoice = Option<(Side, SyncMode)>;
 
 fn namespace(database: &str, collection: &str) -> String {
     if collection.is_empty() { database.to_string() } else { format!("{database}.{collection}") }

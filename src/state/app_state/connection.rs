@@ -577,6 +577,28 @@ impl AppState {
         cx.notify();
     }
 
+    /// Records a successful connect. Only the time changes: saving through `update_connection`
+    /// would give the connection a new keychain entry, and with it a new identity, which reads as
+    /// changed settings to task approvals and agent grants.
+    pub fn set_connection_last_connected(
+        &mut self,
+        connection_id: Uuid,
+        at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let Some(connection) = self.connections.iter_mut().find(|item| item.id == connection_id)
+        else {
+            return;
+        };
+        connection.last_connected = Some(at);
+        // While credentials are being stored, that save writes the time too.
+        if !self.connections_persistence_blocked
+            && !self.connection_secret_sync_pending
+            && let Err(error) = self.config.save_connections(&self.connections)
+        {
+            log::warn!("Could not save when the connection was last used: {error}");
+        }
+    }
+
     pub fn set_connection_agent_writable(
         &mut self,
         connection_id: Uuid,
