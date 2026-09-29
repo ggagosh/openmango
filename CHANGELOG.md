@@ -8,6 +8,8 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-29
+
 ### Highlights
 - **Compare and sync.** Compare two collections or two whole databases, see exactly what differs, and sync the changes you choose, with undo.
 - **Tasks.** Save a transfer or a comparison as a task and run it on a schedule, even while OpenMango is closed, with safety limits, retries, and a notification when something goes wrong.
