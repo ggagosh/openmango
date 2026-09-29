@@ -125,6 +125,27 @@ impl AppCommands {
                                 cx,
                             );
                         }
+                        let manager = state.read(cx).connection_manager();
+                        if let Some(exit) = manager.take_before_connect_exit(connection_id) {
+                            let state = state.clone();
+                            cx.spawn(async move |cx: &mut gpui_kit::AsyncApp| {
+                                // Closed on purpose: nothing is sent, and this ends quietly.
+                                let Ok(error) = exit.await else {
+                                    return;
+                                };
+                                cx.update(|cx| {
+                                    Self::disconnect(state.clone(), connection_id, cx);
+                                    state.update(cx, |state, cx| {
+                                        let event =
+                                            AppEvent::ConnectionFailed { connection_id, error };
+                                        state.update_status_from_event(&event);
+                                        cx.emit(event);
+                                        cx.notify();
+                                    });
+                                });
+                            })
+                            .detach();
+                        }
                     }
                     Err(e) => {
                         log::error!("Failed to connect: {}", e);

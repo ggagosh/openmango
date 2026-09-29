@@ -8,6 +8,9 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+### Added
+- A connection can run a command before connecting and stop it on disconnect, such as `kubectl port-forward`: Network tab, Before connecting. It runs in your login shell, so PATH and kube config are your terminal's. Connecting waits until the URI's port accepts connections, and says plainly what went wrong when it doesn't: the port already in use, the command not found, or what the command itself said. If the command stops later, the connection closes with the reason and offers Reconnect
+
 ## [0.4.0] - 2026-09-29
 
 ### Highlights

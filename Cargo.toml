@@ -87,7 +87,7 @@ schemars = "1.2.1"
 # key behaves exactly like SQLite, so the change-history store is unaffected.
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 # Already built for gpui; used directly to register the launch agent for `--run-due-tasks`.

@@ -11,11 +11,21 @@ use std::sync::Mutex;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
+use crate::connection::before_connect::{self, BeforeConnect};
 use crate::connection::tunnel::{SshTunnelHandle, start_ssh_tunnel};
 use crate::error::{Error, Result};
 use crate::models::{ConnectionRuntimeMeta, ProxyConfig, ProxyKind, SavedConnection};
 
 const SSH_PROXY_CONFLICT_ERROR: &str = "SSH tunnel and SOCKS5 proxy cannot be enabled together yet";
+/// How long the command before connecting gets to open the URI's port.
+const BEFORE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// What a connection keeps running while it's open.
+#[derive(Default)]
+pub struct Transport {
+    tunnel: Option<SshTunnelHandle>,
+    before: Option<BeforeConnect>,
+}
 
 /// Everything the server needs to create a view.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,13 +42,19 @@ pub struct ConnectionManager {
     pub(crate) runtime: Runtime,
     /// Active SSH tunnel handles by connection id
     ssh_tunnels: Mutex<HashMap<Uuid, SshTunnelHandle>>,
+    /// The command each open connection started before connecting, by connection id.
+    before_connect: Mutex<HashMap<Uuid, BeforeConnect>>,
 }
 
 impl ConnectionManager {
     /// Create a new connection manager
     pub fn new() -> Self {
         let runtime = Runtime::new().expect("Failed to create Tokio runtime");
-        Self { runtime, ssh_tunnels: Mutex::new(HashMap::new()) }
+        Self {
+            runtime,
+            ssh_tunnels: Mutex::new(HashMap::new()),
+            before_connect: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Get a handle to the Tokio runtime for spawning parallel tasks
@@ -67,11 +83,23 @@ impl ConnectionManager {
         config: &SavedConnection,
     ) -> Result<(Client, ConnectionRuntimeMeta)> {
         self.stop_tunnel(connection_id);
-        let (client, runtime_meta, tunnel) = self.connect_prepared(config)?;
-        if let Some(tunnel) = tunnel {
+        let (client, runtime_meta, transport) = self.connect_prepared(config)?;
+        if let Some(tunnel) = transport.tunnel {
             self.ssh_tunnels.lock().unwrap().insert(connection_id, tunnel);
         }
+        if let Some(before) = transport.before {
+            self.before_connect.lock().unwrap().insert(connection_id, before);
+        }
         Ok((client, runtime_meta))
+    }
+
+    /// Fires once if the connection's command before connecting ends on its own, with why the
+    /// connection closed. `None` once taken, or without such a command.
+    pub fn take_before_connect_exit(
+        &self,
+        connection_id: Uuid,
+    ) -> Option<futures::channel::oneshot::Receiver<String>> {
+        self.before_connect.lock().unwrap().get_mut(&connection_id)?.take_exit()
     }
 
     /// Build a tool URI that reuses the transport of an active managed connection.
@@ -120,10 +148,21 @@ impl ConnectionManager {
         let mut steps = vec!["Preparing transport settings".to_string()];
         on_progress("Preparing transport settings".to_string());
 
-        let (effective_uri, runtime_meta, tunnel) = match self.prepare_connection(config) {
+        let (effective_uri, runtime_meta, transport) = match self.prepare_connection(config) {
             Ok(prepared) => prepared,
             Err(err) => return Err(annotate_connection_error(err, &steps, None)),
         };
+
+        if let Some(program) = &runtime_meta.before_connect {
+            let step = match uri_endpoint(&config.uri) {
+                Some((host, port)) => {
+                    format!("{program} started; {host}:{port} accepts connections")
+                }
+                None => format!("{program} started"),
+            };
+            steps.push(step.clone());
+            on_progress(step);
+        }
 
         if runtime_meta.ssh_tunnel_active {
             let endpoint = runtime_meta
@@ -154,7 +193,10 @@ impl ConnectionManager {
             on_progress(step);
         }
 
-        let phase_timeout = if runtime_meta.ssh_tunnel_active || runtime_meta.proxy_active {
+        let phase_timeout = if runtime_meta.ssh_tunnel_active
+            || runtime_meta.proxy_active
+            || runtime_meta.before_connect.is_some()
+        {
             timeout.max(Duration::from_secs(15))
         } else {
             timeout
@@ -176,7 +218,7 @@ impl ConnectionManager {
                 client
             }
             Ok(Err(err)) => {
-                drop(tunnel);
+                drop(transport);
                 return Err(annotate_connection_error(
                     Error::from(err),
                     &steps,
@@ -184,7 +226,7 @@ impl ConnectionManager {
                 ));
             }
             Err(_) => {
-                drop(tunnel);
+                drop(transport);
                 return Err(annotate_connection_error(
                     Error::Timeout(
                         "Connection timed out while creating MongoDB client".to_string(),
@@ -206,7 +248,7 @@ impl ConnectionManager {
             .await
         });
 
-        drop(tunnel);
+        drop(transport);
 
         match ping_outcome {
             Ok(Ok(_)) => {
@@ -395,8 +437,8 @@ impl ConnectionManager {
     fn connect_prepared(
         &self,
         config: &SavedConnection,
-    ) -> Result<(Client, ConnectionRuntimeMeta, Option<SshTunnelHandle>)> {
-        let (effective_uri, runtime_meta, tunnel) = self.prepare_connection(config)?;
+    ) -> Result<(Client, ConnectionRuntimeMeta, Transport)> {
+        let (effective_uri, runtime_meta, transport) = self.prepare_connection(config)?;
         let timeout = Duration::from_secs(30);
 
         let client = self
@@ -421,20 +463,30 @@ impl ConnectionManager {
             })
             .map_err(|err| annotate_connection_error(err, &[], Some(&runtime_meta)))?;
 
-        Ok((client, runtime_meta, tunnel))
+        Ok((client, runtime_meta, transport))
     }
 
     fn prepare_connection(
         &self,
         config: &SavedConnection,
-    ) -> Result<(String, ConnectionRuntimeMeta, Option<SshTunnelHandle>)> {
+    ) -> Result<(String, ConnectionRuntimeMeta, Transport)> {
         if transport_combo_enabled(config) {
             return Err(Error::Parse(SSH_PROXY_CONFLICT_ERROR.to_string()));
         }
 
         let mut effective_uri = config.uri.clone();
         let mut runtime_meta = ConnectionRuntimeMeta::default();
-        let mut tunnel_handle = None;
+        let mut transport = Transport::default();
+
+        // First: it opens the port the rest connects to.
+        if let Some(command) =
+            config.before_connect.as_deref().map(str::trim).filter(|command| !command.is_empty())
+        {
+            let before =
+                before_connect::start(command, uri_endpoint(&config.uri), BEFORE_CONNECT_TIMEOUT)?;
+            runtime_meta.before_connect = Some(before.program.clone());
+            transport.before = Some(before);
+        }
 
         if let Some(ssh) = config.ssh.as_ref().filter(|ssh| ssh.enabled) {
             let tunnel = start_ssh_tunnel(ssh)?;
@@ -454,7 +506,7 @@ impl ConnectionManager {
             effective_uri = set_query_param(&effective_uri, "replicaSet", None)?;
             runtime_meta.ssh_tunnel_active = true;
             runtime_meta.ssh_local_endpoint = Some(tunnel.local_endpoint());
-            tunnel_handle = Some(tunnel);
+            transport.tunnel = Some(tunnel);
         }
 
         if let Some(proxy) = config.proxy.as_ref().filter(|proxy| proxy.enabled) {
@@ -465,12 +517,15 @@ impl ConnectionManager {
 
         log::debug!("effective URI: {}", crate::helpers::strip_uri_secrets(&effective_uri));
 
-        Ok((effective_uri, runtime_meta, tunnel_handle))
+        Ok((effective_uri, runtime_meta, transport))
     }
 
     fn stop_tunnel(&self, connection_id: Uuid) {
         if let Some(mut tunnel) = self.ssh_tunnels.lock().unwrap().remove(&connection_id) {
             tunnel.stop();
+        }
+        if let Some(mut before) = self.before_connect.lock().unwrap().remove(&connection_id) {
+            before.stop();
         }
     }
 }
@@ -480,7 +535,26 @@ impl Drop for ConnectionManager {
         for (_id, mut tunnel) in self.ssh_tunnels.get_mut().unwrap().drain() {
             tunnel.stop();
         }
+        for (_id, mut before) in self.before_connect.get_mut().unwrap().drain() {
+            before.stop();
+        }
     }
+}
+
+/// The first host and port of a plain URI, to wait for; none for an SRV URI, which has no port.
+fn uri_endpoint(uri: &str) -> Option<(String, u16)> {
+    if uri.trim().to_ascii_lowercase().starts_with("mongodb+srv://") {
+        return None;
+    }
+    let first = uri_hosts_for_trace(uri)?.split(',').next()?.trim().to_string();
+    // `host:port`, `[v6]:port`, `host`, or `[v6]`.
+    let (host, port) = match first.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') || host.ends_with(']') => {
+            (host.to_string(), port.parse().ok()?)
+        }
+        _ => (first.clone(), 27017),
+    };
+    Some((host.trim_matches(['[', ']']).to_string(), port))
 }
 
 impl Default for ConnectionManager {
@@ -742,7 +816,7 @@ fn connection_hint(message: &str, runtime_meta: &ConnectionRuntimeMeta) -> Optio
 mod tests {
     use super::{
         SSH_PROXY_CONFLICT_ERROR, effective_uri_from_runtime, set_query_param,
-        transport_combo_enabled,
+        transport_combo_enabled, uri_endpoint,
     };
     use crate::error::Error;
     use crate::models::{
@@ -755,6 +829,20 @@ mod tests {
         let updated = set_query_param(uri, "proxyPassword", Some("p@ss:word/with?chars&=".into()))
             .expect("query parameter should be set");
         assert!(updated.contains("proxyPassword=p%40ss%3Aword%2Fwith%3Fchars%26%3D"));
+    }
+
+    #[test]
+    fn uri_endpoint_is_the_first_host_and_port_and_none_for_srv() {
+        let endpoint = |uri: &str| uri_endpoint(uri);
+        assert_eq!(endpoint("mongodb://localhost:27018/app"), Some(("localhost".into(), 27018)));
+        assert_eq!(
+            endpoint("mongodb://user:pw@a.example:27017,b.example:27017/?replicaSet=rs"),
+            Some(("a.example".into(), 27017))
+        );
+        assert_eq!(endpoint("mongodb://db.example"), Some(("db.example".into(), 27017)));
+        assert_eq!(endpoint("mongodb://[::1]:27019"), Some(("::1".into(), 27019)));
+        assert_eq!(endpoint("mongodb://[::1]"), Some(("::1".into(), 27017)));
+        assert_eq!(endpoint("mongodb+srv://cluster.example/app"), None);
     }
 
     #[test]
@@ -779,6 +867,7 @@ mod tests {
             ssh_tunnel_active: true,
             ssh_local_endpoint: Some("127.0.0.1:43123".to_string()),
             proxy_active: false,
+            before_connect: None,
         };
 
         let uri = effective_uri_from_runtime(&saved, &meta).unwrap();
@@ -809,6 +898,7 @@ mod tests {
             ssh_tunnel_active: false,
             ssh_local_endpoint: None,
             proxy_active: true,
+            before_connect: None,
         };
 
         let uri = effective_uri_from_runtime(&saved, &meta).unwrap();

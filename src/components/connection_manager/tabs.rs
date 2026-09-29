@@ -584,6 +584,29 @@ impl ConnectionManager {
         div()
             .flex()
             .flex_col()
+            // Before connecting section
+            .child(
+                div().text_xs().text_color(cx.theme().muted_foreground).child("BEFORE CONNECTING"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(spacing::sm())
+                    .mt(spacing::md())
+                    .child(
+                        v_form().child(
+                            field()
+                                .label("Command")
+                                .child(Input::new(&self.draft.before_connect_state)),
+                        ),
+                    )
+                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
+                        "Runs in your login shell before OpenMango connects, and is stopped when \
+                         you disconnect. Use it for whatever opens the port the URI points at, \
+                         such as kubectl port-forward with mongodb://localhost:27018.",
+                    )),
+            )
             // Mutual-exclusion warning
             .when(both_enabled, |this| {
                 this.child(div().mb(spacing::md()).child(crate::components::ErrorCallout::new(
