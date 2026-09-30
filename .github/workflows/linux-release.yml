@@ -28,10 +28,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          # The oldest supported Ubuntu LTS: an AppImage runs on the glibc it was built with and
+          # anything newer, never older. scripts/check_linux_package.sh holds it to that.
+          - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             arch: x86_64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             arch: arm64
     env:
@@ -49,7 +51,7 @@ jobs:
           bun-version: "1.4.2"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: linux-release-${{ matrix.arch }}
+          shared-key: linux-release-22.04-${{ matrix.arch }}
           # Tag builds restore main's cache; one saved under a tag ref is unreachable from any other ref.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux dependencies

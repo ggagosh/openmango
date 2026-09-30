@@ -1,6 +1,9 @@
 # Linux support
 
-Linux AppImages are built for x86_64 and ARM64 on Ubuntu 24.04 (glibc 2.39).
+Linux AppImages are built for x86_64 and ARM64 on Ubuntu 22.04 (glibc 2.35), the oldest
+supported Ubuntu LTS, so they start there and on anything newer. An AppImage built on a newer
+system refuses to start on an older one; `scripts/check_linux_package.sh` fails the build if
+anything inside needs a newer glibc.
 Pull-request CI produces unsigned previews with checksums and GUI screenshots.
 They are for qualification; public releases and automatic updates require the
 signing configuration and release checks below.
