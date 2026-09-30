@@ -8,6 +8,12 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-30
+
+### Highlights
+- **Run a command before connecting.** Start `kubectl port-forward`, or whatever opens the port, with the connection, and have it stopped when you disconnect.
+- **Linux on older systems.** The AppImage starts on Ubuntu 22.04, Debian 12 and anything newer.
+
 ### Added
 - A connection can run a command before connecting and stop it on disconnect, such as `kubectl port-forward`: Network tab, Before connecting. It runs in your login shell, so PATH and kube config are your terminal's. Connecting waits until the URI's port accepts connections, and says plainly what went wrong when it doesn't: the port already in use, the command not found, or what the command itself said. If the command stops later, the connection closes with the reason and offers Reconnect
 
