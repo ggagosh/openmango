@@ -319,6 +319,7 @@ mod tests {
                     username: Some("proxy-user".into()),
                     password: Some("proxy-password".into()),
                 }),
+                before_connect: None,
                 secret_id: None,
             },
             SavedConnection {
@@ -338,6 +339,7 @@ mod tests {
                 history_max_bytes: 1024 * 1024 * 1024,
                 ssh: None,
                 proxy: None,
+                before_connect: None,
                 secret_id: None,
             },
         ]
@@ -474,6 +476,7 @@ mod tests {
             ssh: None,
             proxy: None,
             secret_id: None,
+            before_connect: None,
         }];
 
         let file = ConnectionExportFile {
@@ -547,6 +550,7 @@ mod tests {
             ssh: None,
             proxy: None,
             secret_id: None,
+            before_connect: None,
         }];
 
         let file = build_export(&conns, ExportMode::Encrypted, Some("pass")).unwrap();

@@ -72,6 +72,10 @@ impl ConnectionDraft {
                 .new(|cx| InputState::new(window, cx).placeholder("/path/cert.pem")),
             tls_cert_key_password_state: cx
                 .new(|cx| InputState::new(window, cx).placeholder("password").masked(true)),
+            before_connect_state: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("kubectl port-forward -n prod pod/mongo-0 27018:27017")
+            }),
             ssh_host_state: cx.new(|cx| InputState::new(window, cx).placeholder("ssh.example.com")),
             ssh_port_state: cx.new(|cx| InputState::new(window, cx).placeholder("22")),
             ssh_username_state: cx.new(|cx| InputState::new(window, cx).placeholder("ubuntu")),
@@ -110,7 +114,7 @@ impl ConnectionDraft {
         }
     }
 
-    fn input_states(&self) -> [&Entity<InputState>; 33] {
+    fn input_states(&self) -> [&Entity<InputState>; 34] {
         [
             &self.name_state,
             &self.uri_state,
@@ -134,6 +138,7 @@ impl ConnectionDraft {
             &self.tls_ca_file_state,
             &self.tls_cert_key_file_state,
             &self.tls_cert_key_password_state,
+            &self.before_connect_state,
             &self.ssh_host_state,
             &self.ssh_port_state,
             &self.ssh_username_state,
@@ -215,6 +220,8 @@ impl ConnectionDraft {
         self.tls_cert_key_file_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.tls_cert_key_password_state
+            .update(cx, |state, cx| state.set_value(String::new(), window, cx));
+        self.before_connect_state
             .update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.ssh_host_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));
         self.ssh_port_state.update(cx, |state, cx| state.set_value(String::new(), window, cx));

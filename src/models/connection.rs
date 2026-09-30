@@ -112,6 +112,8 @@ pub struct ConnectionRuntimeMeta {
     pub ssh_tunnel_active: bool,
     pub ssh_local_endpoint: Option<String>,
     pub proxy_active: bool,
+    /// The program run before connecting, e.g. `kubectl`, while it's running.
+    pub before_connect: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +196,10 @@ pub struct SavedConnection {
     pub proxy: Option<ProxyConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_id: Option<Uuid>,
+    /// Run in the login shell before connecting and stopped on disconnect, e.g. a
+    /// `kubectl port-forward` that opens the port the URI points at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_connect: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -201,6 +207,7 @@ pub struct ConnectionTransportIdentity {
     pub ssh: Option<SshConfig>,
     pub proxy: Option<ProxyConfig>,
     pub secret_id: Option<Uuid>,
+    pub before_connect: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +243,7 @@ impl From<&SavedConnection> for ConnectionWriteIdentity {
                 ssh: stripped.ssh,
                 proxy: stripped.proxy,
                 secret_id: stripped.secret_id,
+                before_connect: stripped.before_connect,
             }),
         }
     }
@@ -277,6 +285,7 @@ impl SavedConnection {
             ssh: None,
             proxy: None,
             secret_id: None,
+            before_connect: None,
         }
     }
 

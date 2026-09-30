@@ -319,7 +319,7 @@ pub fn content_hash(content: &ProposedActionContent) -> Result<String> {
 /// notice a connection that changed since.
 pub fn connection_identity_hash(connection: &crate::models::SavedConnection) -> Result<String> {
     let stripped = connection.with_secrets_stripped();
-    hash_serializable(&serde_json::json!({
+    let mut identity = serde_json::json!({
         "id": stripped.id,
         "name": stripped.name,
         "uri": stripped.uri,
@@ -329,7 +329,12 @@ pub fn connection_identity_hash(connection: &crate::models::SavedConnection) -> 
         "ssh": stripped.ssh,
         "proxy": stripped.proxy,
         "secret_id": stripped.secret_id,
-    }))
+    });
+    // Only when set: connections without one keep the hash they had before the field existed.
+    if let Some(command) = &stripped.before_connect {
+        identity["before_connect"] = serde_json::json!(command);
+    }
+    hash_serializable(&identity)
 }
 
 pub fn hash_serializable(value: &impl serde::Serialize) -> Result<String> {

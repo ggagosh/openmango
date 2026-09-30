@@ -64,6 +64,7 @@ struct ConnectionDraft {
     tls_ca_file_state: Entity<InputState>,
     tls_cert_key_file_state: Entity<InputState>,
     tls_cert_key_password_state: Entity<InputState>,
+    before_connect_state: Entity<InputState>,
     ssh_host_state: Entity<InputState>,
     ssh_port_state: Entity<InputState>,
     ssh_username_state: Entity<InputState>,

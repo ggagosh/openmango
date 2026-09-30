@@ -7,6 +7,7 @@
 //! - `types`: Shared types for all operations
 //! - `csv_utils`: CSV flattening/unflattening utilities
 
+pub mod before_connect;
 pub mod csv_utils;
 pub mod manager;
 pub mod ops;

@@ -273,6 +273,9 @@ impl ConnectionManager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.draft.before_connect_state.update(cx, |state, cx| {
+            state.set_value(connection.before_connect.clone().unwrap_or_default(), window, cx)
+        });
         if let Some(ssh) = &connection.ssh {
             self.draft.ssh_enabled = ssh.enabled;
             self.draft.ssh_use_identity_file = matches!(ssh.auth, SshAuth::IdentityFile);
@@ -913,6 +916,10 @@ impl ConnectionManager {
                 return None;
             }
         };
+        let before_connect = {
+            let command = self.draft.before_connect_state.read(cx).value().trim().to_string();
+            (!command.is_empty()).then_some(command)
+        };
         let selected_id = self.selected_id;
         let mut saved_connection: Option<SavedConnection> = None;
         self.state.update(cx, |state, cx| {
@@ -937,6 +944,7 @@ impl ConnectionManager {
                         ssh: ssh.clone(),
                         proxy: proxy.clone(),
                         secret_id: existing.secret_id,
+                        before_connect: before_connect.clone(),
                     };
                     state.update_connection(connection.clone(), cx);
                     saved_connection = Some(connection);
@@ -953,6 +961,7 @@ impl ConnectionManager {
                 connection.history_enabled = history_enabled;
                 connection.ssh = ssh.clone();
                 connection.proxy = proxy.clone();
+                connection.before_connect = before_connect.clone();
                 state.add_connection(connection.clone(), cx);
                 saved_connection = Some(connection);
             }

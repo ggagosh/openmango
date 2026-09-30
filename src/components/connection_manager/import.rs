@@ -161,11 +161,12 @@ fn finish_import(
         let existing = state.connections_snapshot();
         let imported = connection_io::resolve_import(file, &existing);
         let count = imported.len();
+        let with_command = imported.iter().filter(|c| c.before_connect.is_some()).count();
         let is_redacted = file.mode == ExportMode::Redacted;
 
         state.add_connections(imported, cx);
 
-        let message = if is_redacted {
+        let mut message = if is_redacted {
             format!(
                 "Imported {count} connection{} (passwords not included)",
                 if count == 1 { "" } else { "s" }
@@ -173,6 +174,12 @@ fn finish_import(
         } else {
             format!("Imported {count} connection{}", if count == 1 { "" } else { "s" })
         };
+        if with_command > 0 {
+            message.push_str(&format!(
+                "; {with_command} run{} a command before connecting, shown under Network in the editor",
+                if with_command == 1 { "s" } else { "" }
+            ));
+        }
         state.set_status_message(Some(StatusMessage::info(message)));
     });
 }
