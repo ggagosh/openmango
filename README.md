@@ -27,7 +27,7 @@
 </p>
 
 > [!NOTE]
-> **Status:** actively developed and pre-1.0; the current release is 0.4.0. macOS releases are signed and notarized.
+> **Status:** actively developed and pre-1.0; the current release is 0.4.1. macOS releases are signed and notarized.
 
 ## Why OpenMango
 
