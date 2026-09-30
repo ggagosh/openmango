@@ -16,8 +16,12 @@ parser.add_argument("--os", default="linux", choices=["linux", "windows"])
 args = parser.parse_args()
 if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", args.commit):
     parser.error("a full Git commit is required")
+# Not hashlib.file_digest: it needs Python 3.11, and Ubuntu 22.04, where releases are built, has 3.10.
+hasher = hashlib.sha256()
 with args.artifact.open("rb") as source:
-    digest = hashlib.file_digest(source, "sha256").hexdigest()
+    for chunk in iter(lambda: source.read(1 << 20), b""):
+        hasher.update(chunk)
+digest = hasher.hexdigest()
 metadata = {
     "schema": 1,
     "os": args.os,

@@ -55,10 +55,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          # The same Ubuntu the released AppImages are built on; see linux-release.yml.
+          - runner: ubuntu-22.04
             arch: x86_64
             target: x86_64-unknown-linux-gnu
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-22.04-arm
             arch: arm64
             target: aarch64-unknown-linux-gnu
     steps:
@@ -71,6 +72,8 @@ jobs:
           bun-version: "1.4.2"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Not the cache built on Ubuntu 24.04.
+          key: ubuntu-22.04
           # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux dependencies

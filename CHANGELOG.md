@@ -11,6 +11,9 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 ### Added
 - A connection can run a command before connecting and stop it on disconnect, such as `kubectl port-forward`: Network tab, Before connecting. It runs in your login shell, so PATH and kube config are your terminal's. Connecting waits until the URI's port accepts connections, and says plainly what went wrong when it doesn't: the port already in use, the command not found, or what the command itself said. If the command stops later, the connection closes with the reason and offers Reconnect
 
+### Fixed
+- The Linux AppImage starts on systems with glibc 2.35 or newer, such as Ubuntu 22.04 and Debian 12. 0.4.0's was built on Ubuntu 24.04 and refused to start on anything older, with "version GLIBC_2.39 not found"
+
 ## [0.4.0] - 2026-09-29
 
 ### Highlights
