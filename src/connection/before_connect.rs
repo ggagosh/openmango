@@ -25,11 +25,21 @@ pub struct BeforeConnect {
     pid: u32,
     /// The program's name, for messages: `kubectl`.
     pub program: String,
+    /// The command as given, so another connection running the same one can share it.
+    pub command: String,
     status: Arc<Mutex<Option<ExitStatus>>>,
     output: Arc<Mutex<VecDeque<String>>>,
     stopped: Arc<AtomicBool>,
     /// Sent once if the command ends on its own, with why the connection closed.
-    exit: Option<oneshot::Receiver<String>>,
+    exit: Mutex<Option<oneshot::Receiver<String>>>,
+    /// Our end of the pipe the wrapper waits on; the system closes it however OpenMango ends.
+    #[cfg(unix)]
+    #[allow(dead_code, reason = "held, never read: it only has to stay open")]
+    lifeline: Option<std::process::ChildStdin>,
+    /// The job the command runs in; Windows ends it when OpenMango ends.
+    #[cfg(windows)]
+    #[allow(dead_code, reason = "held, never read: it only has to stay open")]
+    job: Option<job::Job>,
 }
 
 /// Starts `command` and waits until `endpoint` accepts a TCP connection, or, without one (an
@@ -41,7 +51,7 @@ pub fn start(
 ) -> Result<BeforeConnect> {
     let program = program_name(command);
     let mut child = shell(command)
-        .stdin(Stdio::null())
+        .stdin(if cfg!(unix) { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -65,16 +75,20 @@ pub fn start(
             }
         });
     }
+    let (exit_tx, exit_rx) = oneshot::channel();
     let mut handle = BeforeConnect {
         pid: child.id(),
         program: program.clone(),
+        command: command.to_string(),
         status: Arc::new(Mutex::new(None)),
         output,
         stopped: Arc::new(AtomicBool::new(false)),
-        exit: None,
+        exit: Mutex::new(Some(exit_rx)),
+        #[cfg(unix)]
+        lifeline: child.stdin.take(),
+        #[cfg(windows)]
+        job: job::Job::kill_on_close(&child),
     };
-    let (exit_tx, exit_rx) = oneshot::channel();
-    handle.exit = Some(exit_rx);
     thread::spawn({
         let (status, output, stopped, program) =
             (handle.status.clone(), handle.output.clone(), handle.stopped.clone(), program.clone());
@@ -137,8 +151,8 @@ impl BeforeConnect {
     }
 
     /// Fires once if the command ends on its own, with why the connection closed.
-    pub fn take_exit(&mut self) -> Option<oneshot::Receiver<String>> {
-        self.exit.take()
+    pub fn take_exit(&self) -> Option<oneshot::Receiver<String>> {
+        self.exit.lock().unwrap().take()
     }
 
     fn lines(&self) -> Vec<String> {
@@ -173,13 +187,27 @@ pub fn program_name(command: &str) -> String {
     first.rsplit(['/', '\\']).next().unwrap_or(first).to_string()
 }
 
+/// Runs the command (`$2`) in the login shell (`$1`), and stops it when the pipe on stdin closes:
+/// OpenMango never writes to it, and the system closes it when OpenMango ends, crash and force
+/// quit included. Exits with the command's status otherwise.
+#[cfg(unix)]
+const LIFELINE: &str = r#"exec 3<&0
+"$1" -l -c "$2" </dev/null &
+command=$!
+{ read -r _ <&3; kill -TERM 0; } &
+watch=$!
+wait "$command"
+status=$?
+kill "$watch" 2>/dev/null
+exit "$status""#;
+
 #[cfg(unix)]
 fn shell(command: &str) -> std::process::Command {
     use std::os::unix::process::CommandExt as _;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    let mut process = std::process::Command::new(shell);
+    let mut process = std::process::Command::new("/bin/sh");
     // A login shell sets the PATH the terminal has; its own group so a stop reaches what it ran.
-    process.arg("-l").arg("-c").arg(command).process_group(0);
+    process.arg("-c").arg(LIFELINE).arg("sh").arg(shell).arg(command).process_group(0);
     process
 }
 
@@ -196,6 +224,58 @@ fn terminate(pid: u32, force: bool) {
     // SAFETY: a signal to our own child's process group; no memory is involved.
     unsafe {
         libc::kill(-(pid as i32), signal);
+    }
+}
+
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::AsRawHandle as _;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+
+    /// A job that ends every process in it when its last handle closes, which Windows does
+    /// however OpenMango ends. The handle, as an address so the type is `Send`.
+    pub(super) struct Job(usize);
+
+    impl Job {
+        /// `None` when Windows refuses; the command then outlives a crash, as before.
+        // ponytail: cmd may start the program before it joins the job; that takes cmd
+        // milliseconds and joining microseconds. Spawn suspended if it ever matters.
+        pub(super) fn kill_on_close(child: &std::process::Child) -> Option<Self> {
+            // SAFETY: Win32 calls on a job created here and a child process we own.
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if handle.is_null() {
+                    return None;
+                }
+                let job = Self(handle as usize);
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let limited = SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) != 0;
+                let joined = limited
+                    && AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) != 0;
+                joined.then_some(job)
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: the handle CreateJobObjectW returned, closed once.
+            unsafe {
+                CloseHandle(self.0 as HANDLE);
+            }
+        }
     }
 }
 
@@ -359,11 +439,57 @@ mod tests {
         assert!(error.is_transient(), "worth trying again");
 
         // Ending on its own after a connect is reported once.
-        let mut short = start("sleep 0.3", endpoint, Duration::from_secs(5)).unwrap();
+        let short = start("sleep 0.3", endpoint, Duration::from_secs(5)).unwrap();
         let exit = short.take_exit().unwrap();
         let reason = futures::executor::block_on(exit).unwrap();
         assert!(reason.starts_with("Sleep stopped (code 0)"), "{reason}");
         assert!(short.take_exit().is_none());
+    }
+
+    /// Closing OpenMango's end of the pipe is what the system does when OpenMango crashes or is
+    /// force-quit: the command stops without a stop.
+    #[cfg(unix)]
+    #[test]
+    fn the_command_stops_when_openmango_ends_without_stopping_it() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Some(("127.0.0.1".to_string(), listener.local_addr().unwrap().port()));
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let command = format!("sh -c 'echo $$ > {}; exec sleep 30'", pid_file.display());
+        let mut running = start(&command, endpoint, Duration::from_secs(5)).unwrap();
+
+        let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+        let until = |done: &dyn Fn() -> bool| {
+            let started = Instant::now();
+            while !done() && started.elapsed() < Duration::from_secs(5) {
+                thread::sleep(POLL);
+            }
+            done()
+        };
+        let read_pid = || std::fs::read_to_string(&pid_file).ok()?.trim().parse::<i32>().ok();
+        assert!(until(&|| read_pid().is_some()), "the command wrote its pid");
+        let pid = read_pid().unwrap();
+        assert!(alive(pid));
+
+        drop(running.lifeline.take());
+        assert!(until(&|| !alive(pid)), "the command ended with OpenMango");
+        assert!(until(&|| running.exited()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_command_stops_when_openmango_ends_without_stopping_it() {
+        let mut running =
+            start("ping -n 30 127.0.0.1 > nul", None, Duration::from_secs(5)).unwrap();
+        assert!(running.job.is_some(), "the command runs in a job");
+        assert!(!running.exited());
+        // Windows closes the job's handle when OpenMango ends, however it ends.
+        drop(running.job.take());
+        let started = Instant::now();
+        while !running.exited() && started.elapsed() < Duration::from_secs(5) {
+            thread::sleep(POLL);
+        }
+        assert!(running.exited(), "the command ended with its job");
     }
 
     #[cfg(unix)]

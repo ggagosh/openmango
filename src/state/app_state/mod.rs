@@ -272,7 +272,9 @@ impl AppState {
                 (RelationGraph::new(), Some(message))
             }
         };
-        let workspace_restore_pending = workspace.last_connection_id.is_some();
+        // Off: start with no connection open, and the last session's tabs closed.
+        let workspace_restore_pending =
+            settings.connect_on_startup && workspace.last_connection_id.is_some();
         let aggregation_workspace_save_gen = Arc::new(AtomicU64::new(0));
 
         let startup_keybindings = settings.keybindings.clone();

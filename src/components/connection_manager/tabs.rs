@@ -866,6 +866,9 @@ impl ConnectionManager {
                             .child("Direct connection"),
                     ),
             )
+            .child(div().mt(spacing::xs()).text_xs().text_color(cx.theme().muted_foreground).child(
+                "A single host already connects directly unless the URI names a replicaSet.",
+            ))
             // Read/Write concern grid
             .child(
                 div()

@@ -34,6 +34,9 @@ pub struct AppSettings {
     pub update_channel: UpdateChannel,
     #[serde(default)]
     pub collection_double_click_action: CollectionDoubleClickAction,
+    /// Reconnects to the last connection, and reopens its tabs, when OpenMango starts.
+    #[serde(default = "default_true")]
+    pub connect_on_startup: bool,
 }
 
 impl Default for AppSettings {
@@ -49,6 +52,7 @@ impl Default for AppSettings {
             auto_update: true,
             update_channel: UpdateChannel::default(),
             collection_double_click_action: CollectionDoubleClickAction::default(),
+            connect_on_startup: true,
         }
     }
 }
