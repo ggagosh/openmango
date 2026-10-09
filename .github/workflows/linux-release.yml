@@ -53,7 +53,8 @@ jobs:
         with:
           shared-key: linux-release-22.04-${{ matrix.arch }}
           # Tag builds restore main's cache; one saved under a tag ref is unreachable from any other ref.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # GitHub keeps 10 GB of caches per repository; CI's, which pull requests wait on, get it.
+          save-if: false
       - name: Install Linux dependencies
         run: bash scripts/bootstrap_linux.sh --desktop-tests
       - name: Load Linux signing key

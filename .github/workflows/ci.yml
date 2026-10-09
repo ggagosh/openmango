@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # Twice a week, so main's build caches aren't deleted after 7 days without a run.
+  schedule:
+    - cron: "17 4 * * 1,4"
 
 permissions:
   contents: read
@@ -49,7 +52,10 @@ jobs:
 
   linux:
     name: Linux (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    # Release pull requests (release/<version>) and manual runs build both architectures and
+    # the AppImage. Elsewhere x86_64 runs clippy and the unit tests, and arm64 passes as an empty
+    # job, since main requires its check; the nightly packages and smoke-tests both after a merge.
+    runs-on: ${{ (matrix.arch == 'x86_64' || startsWith(github.head_ref, 'release/') || github.event_name == 'workflow_dispatch') && matrix.runner || 'ubuntu-24.04' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -62,44 +68,62 @@ jobs:
           - runner: ubuntu-22.04-arm
             arch: arm64
             target: aarch64-unknown-linux-gnu
+    env:
+      FULL: ${{ matrix.arch == 'x86_64' || startsWith(github.head_ref, 'release/') || github.event_name == 'workflow_dispatch' }}
+      PACKAGE: ${{ startsWith(github.head_ref, 'release/') || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.FULL == 'true'
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: env.FULL == 'true'
         with:
           toolchain: stable
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: env.FULL == 'true'
         with:
           bun-version: "1.4.2"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: env.FULL == 'true'
         with:
           # Not the cache built on Ubuntu 24.04.
           key: ubuntu-22.04
           # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux dependencies
+        if: env.FULL == 'true'
         run: bash scripts/bootstrap_linux.sh --desktop-tests
       - name: Format check
+        if: env.FULL == 'true'
         run: cargo fmt --check
       - name: Clippy
+        if: env.FULL == 'true'
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Run unit tests
+        if: env.FULL == 'true'
         # Debug profile: the integration-test seams in src/ are gated on cfg(debug_assertions).
         run: cargo test --locked --lib -- --test-threads=1
       - name: Verify bundled helper scripts
+        if: env.FULL == 'true'
         run: bash scripts/check_linux_tools.sh
       - name: Verify Forge sidecar bundle
+        if: env.FULL == 'true'
         run: bash scripts/check_mongosh_sidecar.sh
       - name: Package Linux preview
+        if: env.PACKAGE == 'true'
         run: bash scripts/release_linux.sh '${{ matrix.target }}'
       - name: Check packaged application and helpers
+        if: env.PACKAGE == 'true'
         run: bash scripts/check_linux_package.sh 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' --database-tests
       - name: Smoke-test packaged desktop session
+        if: env.PACKAGE == 'true'
         run: python3 scripts/check_linux_gui.py 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' target/linux-gui.png
       - name: Verify combined title bar on Xfce
+        if: env.PACKAGE == 'true'
         env:
           OPENMANGO_GUI_WINDOW_MANAGER: xfwm4
         run: python3 scripts/check_linux_gui.py 'dist/OpenMango-'*'-linux-${{ matrix.arch }}.AppImage' target/linux-gui-xfce.png
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: env.PACKAGE == 'true'
         with:
           name: Linux-preview-${{ matrix.arch }}
           path: |

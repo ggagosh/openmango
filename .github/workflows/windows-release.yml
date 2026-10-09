@@ -54,7 +54,8 @@ jobs:
         with:
           shared-key: windows-release-${{ matrix.arch }}
           # Tag builds restore main's cache; one saved under a tag ref is unreachable from any other ref.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # GitHub keeps 10 GB of caches per repository; CI's, which pull requests wait on, get it.
+          save-if: false
       - name: Install Strawberry Perl
         shell: pwsh
         run: if (-not (Test-Path C:\Strawberry\perl\bin\perl.exe)) { choco install strawberryperl -y --no-progress }

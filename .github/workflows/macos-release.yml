@@ -51,7 +51,8 @@ jobs:
         with:
           shared-key: release-${{ matrix.target }}
           # Tag builds restore main's cache; one saved under a tag ref is unreachable from any other ref.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # GitHub keeps 10 GB of caches per repository; CI's, which pull requests wait on, get it.
+          save-if: false
       - name: Build Forge mongosh sidecar
         run: bash scripts/build_mongosh_sidecar.sh ${{ matrix.target }}
       - name: Download MongoDB Database Tools
