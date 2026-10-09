@@ -167,7 +167,7 @@ Stable builds are signed and notarized.
 
 ### Windows
 
-Download the installer for your PC from the [nightly release](https://github.com/ggagosh/openmango/releases/tag/nightly):
+Download the installer for your PC from the [latest release](https://github.com/ggagosh/openmango/releases/latest):
 `windows-x86_64-setup.exe` for most PCs, or `windows-arm64-setup.exe` for Arm devices.
 It installs for your user without administrator rights and adds OpenMango to the Start menu.
 Installers are not code-signed yet, so Windows SmartScreen asks for confirmation:
@@ -200,8 +200,8 @@ For AI features, open **Settings**, enable AI, and choose a provider. Remote-pro
 Every download has a SHA-256 checksum, and Windows and Linux updates are additionally
 verified against a signed manifest. OpenMango can download the matching update in the
 background and installs it only after you choose **Restart and install**.
-Windows and Linux packages are published with nightly builds today; stable releases include
-them starting with the next version. Nightly builds include unreleased changes and may be unstable.
+Nightly builds include unreleased changes and may be unstable. They're published for macOS and
+Linux; Windows gets stable releases only.
 
 ## Data safety and privacy
 

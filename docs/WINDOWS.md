@@ -91,8 +91,8 @@ The Windows workflows reuse the Linux signing configuration:
   `OPENMANGO_UPDATE_PUBLIC_KEY`.
 - Repository secret `LINUX_SIGNING_KEY`, used by the Ubuntu signing job.
 - Repository variable `WINDOWS_RELEASES_ENABLED=true`: enables both Windows
-  architectures in stable and nightly publication. Leave unset until the release
-  gate passes.
+  architectures in stable publication. Nightly builds don't include Windows. Leave
+  unset until the release gate passes.
 
 ## Pinned build tools
 
@@ -114,7 +114,8 @@ installer, installation into a non-ASCII path, bundled tool startup, the Forge p
 uninstall, the static C runtime (only Windows system DLLs are imported), launch without a
 console window, and the update handoff: a successful silent reinstall that reopens the app
 and removes its staging folder, and a failed one that reopens the previous version and keeps it.
-Windows CI runs the installer checks natively on x64 and ARM64. Integration suites need
+Windows CI runs the installer checks natively on x64 and ARM64, on release pull
+requests (`release/<version>`) and manual runs of the CI workflow; other pull requests skip it. Integration suites need
 Linux containers and run on the Linux CI job.
 
 Before public Windows releases:

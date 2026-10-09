@@ -8,6 +8,9 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+### Changed
+- Nightly builds are published for macOS and Linux; Windows gets stable releases only
+
 ## [0.4.1] - 2026-09-30
 
 ### Highlights

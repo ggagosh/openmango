@@ -113,7 +113,11 @@ jobs:
 
   windows:
     name: Windows (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    # Windows is the slowest by far, so it runs on release pull requests (`just prepare-release`
+    # names them release/<version>) and on manual runs. Elsewhere the same check passes as an
+    # empty job on Linux, since main requires it; skipping the job instead would report it under
+    # its unexpanded name and leave the check waiting.
+    runs-on: ${{ (startsWith(github.head_ref, 'release/') || github.event_name == 'workflow_dispatch') && matrix.runner || 'ubuntu-24.04' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -129,32 +133,43 @@ jobs:
     env:
       # Git Bash's perl cannot configure the vendored OpenSSL build.
       OPENSSL_SRC_PERL: C:\Strawberry\perl\bin\perl.exe
+      FULL: ${{ startsWith(github.head_ref, 'release/') || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.FULL == 'true'
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: env.FULL == 'true'
         with:
           toolchain: stable
           components: clippy
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: env.FULL == 'true'
         with:
           bun-version: "1.4.2"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: env.FULL == 'true'
         with:
           # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Strawberry Perl
+        if: env.FULL == 'true'
         shell: pwsh
         run: if (-not (Test-Path C:\Strawberry\perl\bin\perl.exe)) { choco install strawberryperl -y --no-progress }
       - name: Clippy
+        if: env.FULL == 'true'
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Run unit tests
+        if: env.FULL == 'true'
         run: cargo test --locked --lib -- --test-threads=1
       # Packaging compiles the Forge sidecar, so no separate bundle check here.
       - name: Package Windows preview
+        if: env.FULL == 'true'
         run: bash scripts/release_windows.sh
       - name: Check installer, bundled tools, and launch
+        if: env.FULL == 'true'
         run: bash scripts/check_windows_package.sh dist/OpenMango-*-windows-${{ matrix.arch }}-setup.exe --launch
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: env.FULL == 'true'
         with:
           name: Windows-preview-${{ matrix.arch }}
           path: dist/OpenMango-*-windows-${{ matrix.arch }}-setup.exe*
