@@ -485,7 +485,7 @@ fn render_documents_actions_clean(
                     );
                 }
             }),
-        crate::assets::AppIcon::Braces,
+        crate::assets::AppIcon::Pencil,
         "Edit JSON",
     )
     .label("Edit");

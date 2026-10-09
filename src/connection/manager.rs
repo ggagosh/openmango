@@ -515,6 +515,7 @@ impl ConnectionManager {
             runtime_meta.proxy_active = true;
         }
 
+        let effective_uri = default_direct_connection(&effective_uri)?;
         log::debug!("effective URI: {}", crate::helpers::strip_uri_secrets(&effective_uri));
 
         Ok((effective_uri, runtime_meta, transport))
@@ -530,14 +531,24 @@ impl ConnectionManager {
     }
 }
 
-impl Drop for ConnectionManager {
-    fn drop(&mut self) {
-        for (_id, mut tunnel) in self.ssh_tunnels.get_mut().unwrap().drain() {
+impl ConnectionManager {
+    /// Stops every tunnel and command connections started. Quitting calls it: the process exits
+    /// without dropping the manager, so `Drop` alone would leave a port-forward running.
+    pub fn stop_all(&self) {
+        let tunnels: Vec<_> = self.ssh_tunnels.lock().unwrap().drain().collect();
+        let commands: Vec<_> = self.before_connect.lock().unwrap().drain().collect();
+        for (_id, mut tunnel) in tunnels {
             tunnel.stop();
         }
-        for (_id, mut before) in self.before_connect.get_mut().unwrap().drain() {
+        for (_id, mut before) in commands {
             before.stop();
         }
+    }
+}
+
+impl Drop for ConnectionManager {
+    fn drop(&mut self) {
+        self.stop_all();
     }
 }
 
@@ -617,7 +628,25 @@ fn effective_uri_from_runtime(
         ));
     }
 
-    Ok(uri)
+    default_direct_connection(&uri)
+}
+
+/// A single host with no replica set named connects to that host only, as Studio 3T and Robo 3T
+/// do. Discovery would swap it for the members the replica set advertises, which a port-forward,
+/// a container network or NAT can't reach. A URI that sets `directConnection`, `replicaSet` or
+/// `loadBalanced`, lists several hosts, or uses SRV keeps the driver's discovery.
+fn default_direct_connection(uri: &str) -> Result<String> {
+    let parts = parse_uri_parts(uri)?;
+    let hosts = parts.authority.rsplit_once('@').map_or(parts.authority.as_str(), |(_, h)| h);
+    let topology_set = parts.query.iter().any(|(key, _)| {
+        ["directConnection", "replicaSet", "loadBalanced"]
+            .iter()
+            .any(|name| key.eq_ignore_ascii_case(name))
+    });
+    if !parts.scheme.eq_ignore_ascii_case("mongodb") || hosts.contains(',') || topology_set {
+        return Ok(uri.to_string());
+    }
+    set_query_param(uri, "directConnection", Some("true".to_string()))
 }
 
 fn validate_proxy_config(proxy: &ProxyConfig) -> Result<()> {
@@ -815,8 +844,8 @@ fn connection_hint(message: &str, runtime_meta: &ConnectionRuntimeMeta) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        SSH_PROXY_CONFLICT_ERROR, effective_uri_from_runtime, set_query_param,
-        transport_combo_enabled, uri_endpoint,
+        SSH_PROXY_CONFLICT_ERROR, default_direct_connection, effective_uri_from_runtime,
+        set_query_param, transport_combo_enabled, uri_endpoint,
     };
     use crate::error::Error;
     use crate::models::{
@@ -829,6 +858,28 @@ mod tests {
         let updated = set_query_param(uri, "proxyPassword", Some("p@ss:word/with?chars&=".into()))
             .expect("query parameter should be set");
         assert!(updated.contains("proxyPassword=p%40ss%3Aword%2Fwith%3Fchars%26%3D"));
+    }
+
+    #[test]
+    fn a_single_host_connects_directly_unless_the_uri_sets_a_topology() {
+        let direct = |uri: &str| default_direct_connection(uri).unwrap();
+        assert_eq!(
+            direct("mongodb://localhost:27018"),
+            "mongodb://localhost:27018?directConnection=true"
+        );
+        assert_eq!(
+            direct("mongodb://u:p%40ss@db.example:27017/app?authSource=admin"),
+            "mongodb://u:p%40ss@db.example:27017/app?authSource=admin&directConnection=true"
+        );
+        for kept in [
+            "mongodb://localhost:27018/?directConnection=false",
+            "mongodb://localhost:27018/?replicaSet=rs0",
+            "mongodb://localhost:27018/?loadBalanced=true",
+            "mongodb://a.example:27017,b.example:27017/app",
+            "mongodb+srv://cluster.example/app",
+        ] {
+            assert_eq!(direct(kept), kept);
+        }
     }
 
     #[test]

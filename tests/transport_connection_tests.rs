@@ -100,6 +100,33 @@ where
         .expect("blocking task panicked while running connection-manager operation")
 }
 
+/// A replica set reached through a mapped port advertises its container's hostname, which this
+/// machine can't resolve: the same as a pod behind `kubectl port-forward`. A single-host URI
+/// connects anyway, as in Studio 3T; asking for discovery fails, which is why it's not the default.
+#[tokio::test]
+async fn a_forwarded_replica_set_connects_without_direct_connection_in_the_uri() {
+    use testcontainers::{ImageExt as _, runners::AsyncRunner as _};
+    use testcontainers_modules::mongo::Mongo;
+
+    let set = Mongo::repl_set().with_tag("7.0").start().await.expect("replica set container");
+    let port = set.get_host_port_ipv4(27017).await.expect("mapped port");
+    let connection = |query: &str| {
+        SavedConnection::new("Forwarded".into(), format!("mongodb://127.0.0.1:{port}/?{query}"))
+    };
+
+    let plain = connection("serverSelectionTimeoutMS=20000");
+    run_blocking(move || ConnectionManager::new().test_connection(&plain, Duration::from_secs(30)))
+        .await
+        .expect("a single host connects directly");
+
+    let discovery = connection("directConnection=false&serverSelectionTimeoutMS=3000");
+    let failed = run_blocking(move || {
+        ConnectionManager::new().test_connection(&discovery, Duration::from_secs(10))
+    })
+    .await;
+    assert!(failed.is_err(), "discovery should look for the unreachable member");
+}
+
 #[tokio::test]
 async fn ssh_password_connect_managed_success_sets_runtime_meta() {
     init_logger();

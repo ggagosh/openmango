@@ -8,6 +8,16 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+### Added
+- Settings, General, Startup: Reconnect to the last connection can be turned off, so OpenMango starts with no connection open and you connect to the one you need
+
+### Changed
+- A URI with one host and no replicaSet connects to that host directly, as in Studio 3T, so a kubectl port-forward or a container's mapped port works without adding directConnection=true. Name the replicaSet, or list several hosts, to have the driver discover the replica set instead
+- Edit actions show a pencil instead of braces
+
+### Fixed
+- Quitting OpenMango stops the commands its connections started before connecting, so a kubectl port-forward no longer keeps its port busy afterwards
+
 ## [0.4.1] - 2026-09-30
 
 ### Highlights

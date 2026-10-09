@@ -321,6 +321,7 @@ impl Render for SettingsView {
                             .flex_col()
                             .gap(spacing::lg())
                             .child(render_appearance_section(general_state.clone(), &settings, cx))
+                            .child(render_startup_section(general_state.clone(), &settings, cx))
                             .child(render_query_section(
                                 general_state.clone(),
                                 &settings,
@@ -629,6 +630,32 @@ fn render_appearance_section(
                 system_collections_checkbox,
                 cx,
             )),
+        cx,
+    )
+}
+
+fn render_startup_section(
+    state: Entity<AppState>,
+    settings: &AppSettings,
+    cx: &App,
+) -> impl IntoElement {
+    let checkbox = gpui_kit::component::checkbox::Checkbox::new("connect-on-startup")
+        .checked(settings.connect_on_startup)
+        .on_click(move |checked, _, cx| {
+            state.update(cx, |state, cx| {
+                state.settings.connect_on_startup = *checked;
+                state.save_settings();
+                cx.notify();
+            });
+        });
+    section(
+        "Startup",
+        setting_row_with_description(
+            "Reconnect to the last connection",
+            "Off: OpenMango starts with no connection open, and you connect to the one you need",
+            checkbox,
+            cx,
+        ),
         cx,
     )
 }
