@@ -8,6 +8,13 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-09
+
+### Highlights
+- **Port-forwards connect as they do in Studio 3T.** A single-host URI connects to that host directly, so `kubectl port-forward` works without adding `directConnection=true`.
+- **No port left busy.** A command started before connecting stops when OpenMango quits, crashes or is force-quit, and a scheduled task shares a port-forward that's already open.
+- **Start without connecting.** Settings can keep OpenMango from reconnecting to the last connection at startup.
+
 ### Added
 - Settings, General, Startup: Reconnect to the last connection can be turned off, so OpenMango starts with no connection open and you connect to the one you need
 
