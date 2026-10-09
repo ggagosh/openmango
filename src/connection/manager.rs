@@ -7,7 +7,7 @@ use std::time::Duration;
 use mongodb::Client;
 use mongodb::bson::doc;
 use mongodb::results::CollectionSpecification;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -24,7 +24,8 @@ const BEFORE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Default)]
 pub struct Transport {
     tunnel: Option<SshTunnelHandle>,
-    before: Option<BeforeConnect>,
+    /// Shared with other connections running the same command; it stops with the last.
+    before: Option<Arc<BeforeConnect>>,
 }
 
 /// Everything the server needs to create a view.
@@ -42,8 +43,9 @@ pub struct ConnectionManager {
     pub(crate) runtime: Runtime,
     /// Active SSH tunnel handles by connection id
     ssh_tunnels: Mutex<HashMap<Uuid, SshTunnelHandle>>,
-    /// The command each open connection started before connecting, by connection id.
-    before_connect: Mutex<HashMap<Uuid, BeforeConnect>>,
+    /// The command each open connection runs before connecting, by connection id. Connections
+    /// running the same command share one.
+    before_connect: Mutex<HashMap<Uuid, Arc<BeforeConnect>>>,
 }
 
 impl ConnectionManager {
@@ -84,13 +86,18 @@ impl ConnectionManager {
     ) -> Result<(Client, ConnectionRuntimeMeta)> {
         self.stop_tunnel(connection_id);
         let (client, runtime_meta, transport) = self.connect_prepared(config)?;
+        self.keep(connection_id, transport);
+        Ok((client, runtime_meta))
+    }
+
+    /// Holds what a connection started for as long as it's open.
+    fn keep(&self, connection_id: Uuid, transport: Transport) {
         if let Some(tunnel) = transport.tunnel {
             self.ssh_tunnels.lock().unwrap().insert(connection_id, tunnel);
         }
         if let Some(before) = transport.before {
             self.before_connect.lock().unwrap().insert(connection_id, before);
         }
-        Ok((client, runtime_meta))
     }
 
     /// Fires once if the connection's command before connecting ends on its own, with why the
@@ -99,7 +106,7 @@ impl ConnectionManager {
         &self,
         connection_id: Uuid,
     ) -> Option<futures::channel::oneshot::Receiver<String>> {
-        self.before_connect.lock().unwrap().get_mut(&connection_id)?.take_exit()
+        self.before_connect.lock().unwrap().get(&connection_id)?.take_exit()
     }
 
     /// Build a tool URI that reuses the transport of an active managed connection.
@@ -482,8 +489,23 @@ impl ConnectionManager {
         if let Some(command) =
             config.before_connect.as_deref().map(str::trim).filter(|command| !command.is_empty())
         {
-            let before =
-                before_connect::start(command, uri_endpoint(&config.uri), BEFORE_CONNECT_TIMEOUT)?;
+            // Already running for another connection, such as the sidebar's while a task runs:
+            // share it, since a second copy couldn't listen on the same port.
+            let running = self
+                .before_connect
+                .lock()
+                .unwrap()
+                .values()
+                .find(|running| running.command == command && !running.exited())
+                .cloned();
+            let before = match running {
+                Some(running) => running,
+                None => Arc::new(before_connect::start(
+                    command,
+                    uri_endpoint(&config.uri),
+                    BEFORE_CONNECT_TIMEOUT,
+                )?),
+            };
             runtime_meta.before_connect = Some(before.program.clone());
             transport.before = Some(before);
         }
@@ -525,9 +547,9 @@ impl ConnectionManager {
         if let Some(mut tunnel) = self.ssh_tunnels.lock().unwrap().remove(&connection_id) {
             tunnel.stop();
         }
-        if let Some(mut before) = self.before_connect.lock().unwrap().remove(&connection_id) {
-            before.stop();
-        }
+        // Stops when no other connection still uses it.
+        let before = self.before_connect.lock().unwrap().remove(&connection_id);
+        drop(before);
     }
 }
 
@@ -540,9 +562,8 @@ impl ConnectionManager {
         for (_id, mut tunnel) in tunnels {
             tunnel.stop();
         }
-        for (_id, mut before) in commands {
-            before.stop();
-        }
+        // Each stops as its last holder goes.
+        drop(commands);
     }
 }
 
@@ -844,8 +865,8 @@ fn connection_hint(message: &str, runtime_meta: &ConnectionRuntimeMeta) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        SSH_PROXY_CONFLICT_ERROR, default_direct_connection, effective_uri_from_runtime,
-        set_query_param, transport_combo_enabled, uri_endpoint,
+        ConnectionManager, SSH_PROXY_CONFLICT_ERROR, default_direct_connection,
+        effective_uri_from_runtime, set_query_param, transport_combo_enabled, uri_endpoint,
     };
     use crate::error::Error;
     use crate::models::{
@@ -858,6 +879,35 @@ mod tests {
         let updated = set_query_param(uri, "proxyPassword", Some("p@ss:word/with?chars&=".into()))
             .expect("query parameter should be set");
         assert!(updated.contains("proxyPassword=p%40ss%3Aword%2Fwith%3Fchars%26%3D"));
+    }
+
+    /// A scheduled run on a connection whose port-forward is already open in the sidebar uses
+    /// that forward; it stops once neither needs it.
+    #[cfg(unix)]
+    #[test]
+    fn connections_running_the_same_command_share_it_until_the_last_lets_go() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut config =
+            SavedConnection::new("Forwarded".into(), format!("mongodb://127.0.0.1:{port}"));
+        config.before_connect = Some("sleep 30".into());
+        let manager = ConnectionManager::new();
+        let (sidebar, task) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+
+        let (_, _, first) = manager.prepare_connection(&config).unwrap();
+        manager.keep(sidebar, first);
+        let (_, _, second) = manager.prepare_connection(&config).unwrap();
+        manager.keep(task, second);
+        let shared = {
+            let running = manager.before_connect.lock().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&running[&sidebar], &running[&task]), "one command");
+            std::sync::Arc::downgrade(&running[&sidebar])
+        };
+
+        manager.disconnect(sidebar);
+        assert!(shared.upgrade().is_some_and(|running| !running.exited()), "the task still has it");
+        manager.disconnect(task);
+        assert!(shared.upgrade().is_none(), "stopped with the last");
     }
 
     #[test]

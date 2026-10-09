@@ -16,7 +16,8 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 - Edit actions show a pencil instead of braces
 
 ### Fixed
-- Quitting OpenMango stops the commands its connections started before connecting, so a kubectl port-forward no longer keeps its port busy afterwards
+- A kubectl port-forward started before connecting no longer keeps its port busy after OpenMango quits, crashes or is force-quit
+- A scheduled task on a connection whose port-forward is already open in OpenMango shares it, instead of failing because the port is in use
 
 ## [0.4.1] - 2026-09-30
 
