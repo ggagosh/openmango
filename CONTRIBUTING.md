@@ -135,7 +135,9 @@ Releases are cut from `main` in two steps:
 1. `just prepare-release 0.2.2` bumps `Cargo.toml` and `Cargo.lock`, moves the CHANGELOG `[Unreleased]` entries under `[0.2.2]`, and opens a `release 0.2.2` pull request.
 2. After that pull request merges, `just tag-release 0.2.2` tags `main` and pushes `v0.2.2`.
 
-The tag starts the Release workflow: it checks that the tag matches `Cargo.toml`, builds and signs the macOS, Linux, and Windows packages, and publishes one GitHub release with the CHANGELOG section as its notes. Nightly builds publish automatically from every push to `main`.
+The tag starts the Release workflow: it checks that the tag matches `Cargo.toml`, builds and signs the macOS, Linux, and Windows packages, and publishes one GitHub release with the CHANGELOG section as its notes. Nightly builds publish automatically from every push to `main`, for macOS and Linux.
+
+To keep pull requests fast, CI runs Windows, Linux arm64 and the Linux AppImage checks only on release pull requests (branches named `release/<version>`, as `just prepare-release` makes) and on manual runs (`gh workflow run ci.yml --ref <branch>`); elsewhere their checks pass as empty jobs. The nightly packages and smoke-tests macOS and Linux after every merge. Run CI by hand on a pull request that changes platform code.
 
 ## Reporting Issues
 

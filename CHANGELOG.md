@@ -14,6 +14,7 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 ### Changed
 - A URI with one host and no replicaSet connects to that host directly, as in Studio 3T, so a kubectl port-forward or a container's mapped port works without adding directConnection=true. Name the replicaSet, or list several hosts, to have the driver discover the replica set instead
 - Edit actions show a pencil instead of braces
+- Nightly builds are published for macOS and Linux; Windows gets stable releases only
 
 ### Fixed
 - A kubectl port-forward started before connecting no longer keeps its port busy after OpenMango quits, crashes or is force-quit

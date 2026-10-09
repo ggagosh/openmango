@@ -54,7 +54,13 @@ pub(super) async fn candidate(
                 .as_str()
                 .is_some_and(|name| name.starts_with("OpenMango-") && name.ends_with(&suffix))
         })
-        .context("The release has no update for this architecture")?;
+        .with_context(|| {
+            if channel == UpdateChannel::Nightly && cfg!(windows) {
+                "Nightly builds aren't published for Windows. Choose Stable under Updates."
+            } else {
+                "The release has no update for this architecture"
+            }
+        })?;
     let name = artifact["name"].as_str().context("The update has no filename")?;
     let metadata_url = asset_url(assets, &format!("{name}.json"))?;
     let signature_url = asset_url(assets, &format!("{name}.json.minisig"))?;
