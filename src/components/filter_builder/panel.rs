@@ -2313,7 +2313,7 @@ impl FilterBuilderPanel {
                             .ghost()
                             .small()
                             .label("Edit MQL")
-                            .icon(Icon::new(crate::assets::AppIcon::Braces).small())
+                            .icon(Icon::new(crate::assets::AppIcon::Pencil).small())
                             .disabled(self.unsupported_reason.is_none() && !can_run)
                             .on_click({
                                 let view = view.clone();

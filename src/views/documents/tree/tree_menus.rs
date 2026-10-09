@@ -55,7 +55,7 @@ pub(in crate::views::documents) fn build_document_menu(
     menu = menu
         .item(
             PopupMenuItem::new("Edit JSON")
-                .icon(Icon::new(crate::assets::AppIcon::Braces))
+                .icon(Icon::new(crate::assets::AppIcon::Pencil))
                 .disabled(multi)
                 .action(Box::new(EditDocumentJson)),
         )

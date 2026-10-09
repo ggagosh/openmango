@@ -8600,6 +8600,7 @@ dependencies = [
  "tree-sitter-javascript 0.25.0",
  "uuid",
  "which",
+ "windows-sys 0.61.2",
  "winresource",
 ]
 

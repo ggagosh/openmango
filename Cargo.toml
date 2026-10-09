@@ -98,6 +98,10 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
 minisign-verify = "=0.2.5"
 
+# Already built for other crates; a Job object ends a connection's command with OpenMango.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects"] }
+
 # Build scripts run on the host; Windows packages are built on Windows.
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
