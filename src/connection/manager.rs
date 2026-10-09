@@ -865,8 +865,8 @@ fn connection_hint(message: &str, runtime_meta: &ConnectionRuntimeMeta) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionManager, SSH_PROXY_CONFLICT_ERROR, default_direct_connection,
-        effective_uri_from_runtime, set_query_param, transport_combo_enabled, uri_endpoint,
+        SSH_PROXY_CONFLICT_ERROR, default_direct_connection, effective_uri_from_runtime,
+        set_query_param, transport_combo_enabled, uri_endpoint,
     };
     use crate::error::Error;
     use crate::models::{
@@ -891,7 +891,7 @@ mod tests {
         let mut config =
             SavedConnection::new("Forwarded".into(), format!("mongodb://127.0.0.1:{port}"));
         config.before_connect = Some("sleep 30".into());
-        let manager = ConnectionManager::new();
+        let manager = super::ConnectionManager::new();
         let (sidebar, task) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
 
         let (_, _, first) = manager.prepare_connection(&config).unwrap();
