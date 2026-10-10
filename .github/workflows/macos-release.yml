@@ -90,7 +90,7 @@ jobs:
           for file in dist/OpenMango-*-${{ matrix.suffix }}.zip; do
             shasum -a 256 "$file" | awk '{print $1}' > "$file.sha256"
           done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: OpenMango-${{ matrix.suffix }}
           if-no-files-found: error
