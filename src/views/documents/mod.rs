@@ -2,9 +2,9 @@
 
 mod actions;
 mod ask_ai;
-mod explain;
 #[cfg(test)]
-mod explain_escape_tests;
+mod escape_tests;
+mod explain;
 mod fast_filter;
 pub(crate) use fast_filter::compile_filter_input;
 mod header;

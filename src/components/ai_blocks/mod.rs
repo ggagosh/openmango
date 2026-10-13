@@ -50,10 +50,13 @@ pub fn render_single_block(
             None => render_code_fallback(id_prefix, index, "datatable", json, style, window, cx),
         },
         ContentBlock::Chart { chart_type, json } => {
+            // A chart's hover state is keyed by its id, which otherwise defaults to the line that
+            // built it: every chart in a conversation would share one.
+            let id = ElementId::Name(format!("{id_prefix}-chart-{index}").into());
             let (lang, rendered) = match chart_type {
-                ChartType::Bar => ("barchart", chart::render_bar(json, cx)),
-                ChartType::Pie => ("piechart", chart::render_pie(json, cx)),
-                ChartType::Line => ("linechart", chart::render_line(json, cx)),
+                ChartType::Bar => ("barchart", chart::render_bar(json, id, cx)),
+                ChartType::Pie => ("piechart", chart::render_pie(json, id, cx)),
+                ChartType::Line => ("linechart", chart::render_line(json, id, cx)),
             };
             match rendered {
                 Some(el) => el,

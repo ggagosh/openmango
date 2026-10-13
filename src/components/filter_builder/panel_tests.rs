@@ -31,8 +31,10 @@ fn harness(
 ) -> (Entity<Harness>, Entity<FilterBuilderPanel>, &mut VisualTestContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        Theme::global_mut(cx).font_family = crate::theme::fonts::ui().into();
-        Theme::global_mut(cx).font_size = px(16.);
+        Theme::update(cx, |theme| {
+            theme.font_family = crate::theme::fonts::ui().into();
+            theme.font_size = px(16.);
+        });
     });
     let mut harness = None;
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -55,7 +57,7 @@ fn harness(
             Harness { panel, width: px(480.), _config: config }
         });
         harness = Some(view.clone());
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     let harness = harness.unwrap();
     let panel = harness.read_with(cx, |view, _| view.panel.clone());
@@ -158,7 +160,7 @@ fn builder_nested_controls_fit_compact_widths_and_ui_scale(cx: &mut TestAppConte
             cx.notify();
         });
         cx.update(|window, cx| {
-            Theme::global_mut(cx).font_size = px(font);
+            Theme::update(cx, |theme| theme.font_size = px(font));
             window.refresh();
         });
         draw(cx);

@@ -408,6 +408,8 @@ impl ConnectionManager {
             test_generation: 0,
             pending_save: None,
             parse_error: None,
+            color_preview: None,
+            custom_color: super::custom_color::CustomColor::new(window, cx),
             _subscriptions: subscriptions,
         };
 

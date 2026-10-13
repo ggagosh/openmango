@@ -1273,10 +1273,7 @@ mod tests {
     use std::sync::Arc;
 
     use gpui_kit::component::{Root, WindowExt as _};
-    use gpui_kit::{
-        AppContext as _, ParentElement as _, Styled as _, TestAppContext, VisualTestContext, px,
-        size,
-    };
+    use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext, px, size};
     use uuid::Uuid;
 
     use crate::components::ContentArea;
@@ -1322,7 +1319,7 @@ mod tests {
         let (_directory, state) = setup(cx);
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-            Root::new(view, window, cx).bordered(false)
+            Root::new(view, window, cx)
         });
         cx.simulate_resize(size(px(1200.0), px(800.0)));
         state.update(cx, |app, cx| app.open_tasks_tab(cx));
@@ -1372,7 +1369,7 @@ mod tests {
         let (_directory, state) = setup(cx);
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-            Root::new(view, window, cx).bordered(false)
+            Root::new(view, window, cx)
         });
         cx.simulate_resize(size(px(700.0), px(700.0)));
         let mut config = CompareConfig { scope: CompareScope::Databases, ..Default::default() };
@@ -1412,7 +1409,7 @@ mod tests {
         let (_directory, state) = setup(cx);
         let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-            Root::new(view, window, cx).bordered(false)
+            Root::new(view, window, cx)
         });
         cx.simulate_resize(size(px(1200.0), px(800.0)));
         let daily = |name: &str| {
@@ -1463,19 +1460,9 @@ mod tests {
     #[gpui_kit::test]
     fn saving_a_compare_tab_shows_whether_the_task_syncs_and_which_way(cx: &mut TestAppContext) {
         let (_directory, state) = setup(cx);
-        struct DialogHost;
-        impl gpui_kit::Render for DialogHost {
-            fn render(
-                &mut self,
-                window: &mut gpui_kit::Window,
-                cx: &mut gpui_kit::Context<Self>,
-            ) -> impl gpui_kit::IntoElement {
-                gpui_kit::div().size_full().children(Root::render_dialog_layer(window, cx))
-            }
-        }
         let (_, cx) = cx.add_window_view(|window, cx| {
-            let host = cx.new(|_| DialogHost);
-            Root::new(host, window, cx).bordered(false)
+            let host = cx.new(|_| gpui_kit::Empty);
+            Root::new(host, window, cx)
         });
         cx.simulate_resize(size(px(1200.0), px(900.0)));
         let id = state.update(cx, |app, cx| {

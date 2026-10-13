@@ -763,10 +763,7 @@ mod tests {
 
     use chrono::{Datelike as _, NaiveTime};
     use gpui_kit::component::{Root, WindowExt as _};
-    use gpui_kit::{
-        AppContext as _, Entity, ParentElement as _, Styled as _, TestAppContext,
-        VisualTestContext, px, size,
-    };
+    use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext, px, size};
 
     use super::{Repeat, open_schedule_dialog};
     use crate::connection::ops::compare::Side;
@@ -850,19 +847,9 @@ mod tests {
             app.upsert_task(compare.clone()).unwrap();
             app.upsert_task(mirror.clone()).unwrap();
         });
-        struct DialogHost;
-        impl gpui_kit::Render for DialogHost {
-            fn render(
-                &mut self,
-                window: &mut gpui_kit::Window,
-                cx: &mut gpui_kit::Context<Self>,
-            ) -> impl gpui_kit::IntoElement {
-                gpui_kit::div().size_full().children(Root::render_dialog_layer(window, cx))
-            }
-        }
         let (_, cx) = cx.add_window_view(|window, cx| {
-            let host = cx.new(|_| DialogHost);
-            Root::new(host, window, cx).bordered(false)
+            let host = cx.new(|_| gpui_kit::Empty);
+            Root::new(host, window, cx)
         });
         cx.simulate_resize(size(px(1200.0), px(900.0)));
 

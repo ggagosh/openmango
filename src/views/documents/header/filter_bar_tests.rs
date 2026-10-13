@@ -64,7 +64,7 @@ fn harness<'a>(
 ) -> (Entity<QueryHarness>, Entity<EditorState>, &'a mut VisualTestContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        Theme::global_mut(cx).font_size = px(16.);
+        Theme::update(cx, |theme| theme.font_size = px(16.));
     });
     let source = text.to_string();
     let mut view = None;
@@ -84,7 +84,7 @@ fn harness<'a>(
             }
         });
         view = Some(query.clone());
-        Root::new(query, window, cx).bordered(false)
+        Root::new(query, window, cx)
     });
     let view = view.unwrap();
     let input = view.read_with(cx, |view, _| view.input.clone());
@@ -123,7 +123,7 @@ fn query_options_stay_compact_and_open_the_complete_projection(cx: &mut TestAppC
             cx.notify();
         });
         cx.update(|window, cx| {
-            Theme::global_mut(cx).font_size = px(rem);
+            Theme::update(cx, |theme| theme.font_size = px(rem));
             window.refresh();
         });
         draw(cx);
@@ -154,7 +154,7 @@ fn query_control_heights_align_at_compact_widths_and_zoom(cx: &mut TestAppContex
             cx.notify();
         });
         cx.update(|window, cx| {
-            Theme::global_mut(cx).font_size = px(rem);
+            Theme::update(cx, |theme| theme.font_size = px(rem));
             window.refresh();
         });
         draw(cx);
@@ -209,7 +209,7 @@ fn collapsed_query_clicks_focus_the_editor_across_the_whole_field(cx: &mut TestA
     let (view, input, cx) = harness(cx, "");
     for rem in [12., 13., 14., 15., 16., 18., 20.] {
         cx.update(|window, cx| {
-            Theme::global_mut(cx).font_size = px(rem);
+            Theme::update(cx, |theme| theme.font_size = px(rem));
             window.refresh();
         });
         for source in ["", "{ archived: false }"] {

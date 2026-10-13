@@ -18,8 +18,8 @@ use crate::components::{ConnectionIdentity, connection_identity_tags};
 use crate::keyboard::{
     CloseSidebarSearch, CopyConnectionUri, CopySelectionName, CopyTreeItem, DeleteSelection,
     DisconnectConnection, EditConnection, FindInSidebar, OpenActionBar, OpenConnectionSwitcher,
-    OpenForge, OpenSelection, OpenSelectionInNewTab, OpenSelectionPreview, PasteTreeItem,
-    RenameCollection, TransferCopy, TransferExport, TransferImport,
+    OpenForge, OpenSelection, OpenSelectionInNewTab, OpenSelectionPreview, OpenSettings,
+    PasteTreeItem, RenameCollection, TransferCopy, TransferExport, TransferImport,
 };
 use crate::models::{CollectionDetail, TreeNodeId};
 use crate::state::TransferMode;
@@ -34,6 +34,9 @@ impl Render for Sidebar {
         let command_palette_tooltip = crate::keyboard::shortcut_label(window, &OpenActionBar)
             .map(|shortcut| format!("Command palette ({shortcut})"))
             .unwrap_or_else(|| "Command palette".to_string());
+        let settings_tooltip = crate::keyboard::shortcut_label(window, &OpenSettings)
+            .map(|shortcut| format!("Settings ({shortcut})"))
+            .unwrap_or_else(|| "Settings".to_string());
         let switcher_tooltip: SharedString =
             crate::keyboard::shortcut_label(window, &OpenConnectionSwitcher)
                 .map(|shortcut| format!("Switch connection ({shortcut})"))
@@ -262,6 +265,16 @@ impl Render for Sidebar {
                                             }),
                                     )
                                     .children(count_badge(pending_agent_actions, cx)),
+                            )
+                            .child(
+                                Button::new("settings-btn")
+                                    .icon(Icon::new(IconName::Settings).xsmall())
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip(settings_tooltip)
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(OpenSettings), cx);
+                                    }),
                             )
                     ),
             )

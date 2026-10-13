@@ -80,7 +80,7 @@ mod tests {
         });
         let (_, cx) = cx.add_window_view(|window, cx| {
             let buttons = cx.new(|_| Buttons);
-            Root::new(buttons, window, cx).bordered(false)
+            Root::new(buttons, window, cx)
         });
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));

@@ -41,7 +41,7 @@ fn compare_sync_checkboxes_toggle_rows_and_category_mixed_state(cx: &mut TestApp
             cancelled: false,
             elapsed: Default::default(),
         });
-        for key in 0..2 {
+        for key in 0..2i32 {
             tab.rows.push(DiffRow {
                 key: key.into(),
                 left_id: None,
@@ -62,7 +62,7 @@ fn compare_sync_checkboxes_toggle_rows_and_category_mixed_state(cx: &mut TestApp
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     cx.simulate_resize(size(px(1200.0), px(900.0)));
     draw(cx);
@@ -128,7 +128,7 @@ fn compare_detail_columns_align_with_headers_for_one_sided_documents(cx: &mut Te
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     for width in [1750.0, 1000.0, 700.0, 430.0] {
         cx.simulate_resize(size(px(width), px(1200.0)));
@@ -207,7 +207,7 @@ fn compare_dropdowns_have_control_sized_hitboxes_inside_their_rows(cx: &mut Test
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     for width in [1750.0, 1200.0, 900.0, 430.0] {
         cx.simulate_resize(size(px(width), px(900.0)));
@@ -440,7 +440,7 @@ fn compare_setup_wraps_and_tab_switches_preserve_setup(cx: &mut TestAppContext) 
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let content = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(content, window, cx).bordered(false)
+        Root::new(content, window, cx)
     });
     for width in [430.0, 900.0, 1200.0] {
         cx.simulate_resize(size(px(width), px(900.0)));
@@ -641,7 +641,7 @@ fn compare_pickers_take_arrow_keys_and_enter(cx: &mut TestAppContext) {
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     cx.simulate_resize(size(px(1400.0), px(900.0)));
     draw(cx);
@@ -750,21 +750,9 @@ fn two_picked_documents_open_side_by_side_with_id_as_information(cx: &mut TestAp
     assert!(matches!(rows[2], DetailRow::Unchanged { count: 2, .. }));
     assert_eq!(rows.len(), 3);
 
-    // The app's root view draws the dialog layer; this host stands in for it.
-    struct DialogHost;
-    impl gpui_kit::Render for DialogHost {
-        fn render(
-            &mut self,
-            window: &mut gpui_kit::Window,
-            cx: &mut gpui_kit::Context<Self>,
-        ) -> impl gpui_kit::IntoElement {
-            use gpui_kit::{ParentElement as _, Styled as _};
-            gpui_kit::div().size_full().children(Root::render_dialog_layer(window, cx))
-        }
-    }
     let (_, cx) = cx.add_window_view(|window, cx| {
-        let host = cx.new(|_| DialogHost);
-        Root::new(host, window, cx).bordered(false)
+        let host = cx.new(|_| gpui_kit::Empty);
+        Root::new(host, window, cx)
     });
     cx.simulate_resize(size(px(1400.0), px(900.0)));
     cx.update(|window, cx| {
@@ -843,7 +831,7 @@ fn a_closed_connection_picked_in_compare_opens_in_place(cx: &mut TestAppContext)
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     cx.simulate_resize(size(px(1400.0), px(900.0)));
     draw(cx);
@@ -1100,7 +1088,7 @@ fn database_results_take_arrow_keys_find_and_enter(cx: &mut TestAppContext) {
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     cx.simulate_resize(size(px(1400.0), px(900.0)));
     draw(cx);
@@ -1307,7 +1295,7 @@ fn database_sync_ticks_collections_and_switches_modes(cx: &mut TestAppContext) {
     });
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     cx.simulate_resize(size(px(1200.0), px(900.0)));
     draw(cx);
@@ -1524,7 +1512,7 @@ fn field_copy_rules_follow_keys_documents_and_sync_state(cx: &mut TestAppContext
 
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     cx.simulate_resize(size(px(1200.0), px(900.0)));
     draw(cx);

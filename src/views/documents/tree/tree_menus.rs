@@ -174,6 +174,12 @@ pub(super) fn build_property_menu(
     let can_remove_element = is_array_element && meta.value.is_some();
     let can_add_field = !is_array_element;
 
+    // A field's right-click selects its document, which is what this action edits.
+    menu = menu.item(
+        PopupMenuItem::new("Edit document JSON")
+            .icon(Icon::new(crate::assets::AppIcon::Pencil))
+            .action(Box::new(EditDocumentJson)),
+    );
     menu = menu.item(
         PopupMenuItem::new("Edit value / type…")
             .icon(Icon::new(IconName::Settings2))

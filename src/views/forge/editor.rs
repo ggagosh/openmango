@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::logic::statement_bounds;
 use crate::helpers::auto_pair::AutoPairState;
+use crate::helpers::editor_selection::select_range;
 
 use super::ForgeView;
 use super::completion::ForgeCompletionProvider;
@@ -58,7 +59,11 @@ impl ForgeView {
 
         let subscription =
             cx.subscribe_in(&editor_state, window, move |this, state, event, window, cx| {
-                if let InputEvent::Blur = event {
+                if let InputEvent::Focus = event {
+                    // ponytail: gpui-base starts the caret while the window draws, which asks for
+                    // no new frame, so it would first show at its second blink, a second later.
+                    cx.notify();
+                } else if let InputEvent::Blur = event {
                     if let Some(buffer) = this.state.editor.buffers.get(&tab_id) {
                         buffer.completion_provider.dismiss(cx);
                     }
@@ -175,8 +180,7 @@ impl ForgeView {
                     WordAction::SelectBackward | WordAction::SelectForward => {
                         let anchor =
                             if cursor == selection.start { selection.end } else { selection.start };
-                        // The native setter preserves reversed selections when end < start.
-                        editor.set_selected_range(anchor..target, cx);
+                        select_range(editor, anchor, target, window, cx);
                     }
                     WordAction::MoveBackward | WordAction::MoveForward => {
                         editor.set_selected_range(target..target, cx);

@@ -326,7 +326,7 @@ mod picker_tests {
             });
             let selector = ModelSelector::new(&state, window, cx);
             let panel = cx.new(|_| Panel { selector });
-            Root::new(panel, window, cx).bordered(false)
+            Root::new(panel, window, cx)
         });
         cx.run_until_parked();
 

@@ -2329,21 +2329,9 @@ mod tests {
             state.attach_task_runs(RunStore::in_memory().unwrap(), None);
             state
         });
-        // The app's root view draws the dialog layer; this host stands in for it.
-        struct DialogHost;
-        impl gpui_kit::Render for DialogHost {
-            fn render(
-                &mut self,
-                window: &mut Window,
-                cx: &mut gpui_kit::Context<Self>,
-            ) -> impl gpui_kit::IntoElement {
-                use gpui_kit::{ParentElement as _, Styled as _};
-                gpui_kit::div().size_full().children(Root::render_dialog_layer(window, cx))
-            }
-        }
         let (_, cx) = cx.add_window_view(|window, cx| {
-            let host = cx.new(|_| DialogHost);
-            Root::new(host, window, cx).bordered(false)
+            let host = cx.new(|_| gpui_kit::Empty);
+            Root::new(host, window, cx)
         });
         cx.simulate_resize(size(px(1200.0), px(900.0)));
 

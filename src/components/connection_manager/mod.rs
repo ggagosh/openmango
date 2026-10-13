@@ -6,6 +6,7 @@ use crate::state::AppState;
 
 mod actions;
 mod connection_list;
+mod custom_color;
 pub(crate) mod export_dialog;
 pub(crate) mod import;
 mod state;
@@ -114,5 +115,8 @@ pub struct ConnectionManager {
     test_generation: u64,
     pending_save: Option<PendingSave>,
     parse_error: Option<String>,
+    /// The color under the pointer, shown in the preview until it leaves; `Some(None)` is None.
+    color_preview: Option<Option<crate::models::ConnectionColor>>,
+    custom_color: custom_color::CustomColor,
     _subscriptions: Vec<Subscription>,
 }

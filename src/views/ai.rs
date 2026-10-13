@@ -2302,6 +2302,10 @@ fn render_turn(
         .flex()
         .flex_col()
         .gap(ai_section_gap())
+        // The kit's Message used to set this on its content; `heading_base_font_size` and the
+        // answer's spacing are measured against it.
+        .text_sm()
+        .line_height(relative(1.25))
         .child(user_msg)
         .children(assistant_section)
         .into_any_element()

@@ -4,6 +4,8 @@
 //! autocomplete, and IDE-like experience.
 
 mod actions;
+#[cfg(test)]
+mod caret_tests;
 mod completion;
 mod controller;
 mod editor;
@@ -461,8 +463,10 @@ impl Render for ForgeView {
         };
         if self.state.editor.editor_focus_requested {
             self.state.editor.editor_focus_requested = false;
+            // After this frame: an editor `sync_active_tab_content` just made only starts listening
+            // for focus once the frame ends, and focusing it before then never starts its caret.
             let focus = editor_state.read(cx).focus_handle(cx);
-            window.focus(&focus, cx);
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
         };
         let forge_view = cx.entity();
         let editor_child: AnyElement = Editor::new(editor_state)

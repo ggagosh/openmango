@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::tab::TabBar;
-use gpui_kit::component::theme::{ThemeConfig, ThemeSet};
+use gpui_kit::component::theme::{Theme, ThemeConfig, ThemeSet};
 use gpui_kit::{App, Entity, Hsla, Pixels, Styled as _, Window, WindowAppearance, px};
 
 use crate::state::{AppState, AppTheme, AppearanceSettings, IslandsTabStyle};
@@ -42,25 +42,25 @@ pub fn load_theme_config(theme_id: &str) -> Option<Rc<ThemeConfig>> {
 
 /// Keep application geometry and typography consistent across all color themes.
 pub fn apply_design_tokens(cx: &mut App) {
-    let theme = gpui_kit::component::theme::Theme::global_mut(cx);
+    Theme::update(cx, set_design_tokens);
+}
+
+fn set_design_tokens(theme: &mut Theme) {
     theme.font_family = fonts::ui().into();
     theme.mono_font_family = fonts::mono().into();
     theme.radius = borders::radius_sm();
     theme.radius_lg = borders::radius_md();
-    // Writing to the theme's fields leaves the kit's Base layer on the colors it was built with,
-    // and that layer paints the markdown in the chat and the scrollbars. Without this a dark
-    // theme draws a white table on a dark answer.
-    gpui_kit::component::theme::Theme::sync_base(cx);
-    // Writing to the theme's fields leaves the kit's Base layer on the colors it was built with,
-    // and that layer paints the markdown in the chat and the scrollbars. Without this a dark
-    // theme draws a white table on a dark answer.
 }
 
-pub fn apply_theme(app_theme: AppTheme, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App) {
+/// `Theme::update` carries the change to the kit's Base layer, which paints the chat's markdown
+/// and the scrollbars, and redraws every window. Writing the fields directly left a dark theme
+/// drawing a white table on a dark answer.
+pub fn apply_theme(app_theme: AppTheme, cx: &mut App) {
     if let Some(config) = load_theme_config(app_theme.theme_id()) {
-        gpui_kit::component::theme::Theme::global_mut(cx).apply_config(&config);
-        apply_design_tokens(cx);
-        window.refresh();
+        Theme::update(cx, |theme| {
+            theme.apply_config(&config);
+            set_design_tokens(theme);
+        });
     }
 }
 
@@ -76,8 +76,8 @@ pub fn resolved_theme(appearance: &AppearanceSettings, system: WindowAppearance)
 }
 
 /// Saves and applies a theme the user picked, which stops following the system appearance.
-pub fn pick_theme(state: &Entity<AppState>, theme: AppTheme, window: &mut Window, cx: &mut App) {
-    save_and_apply(state, theme, false, window, cx);
+pub fn pick_theme(state: &Entity<AppState>, theme: AppTheme, cx: &mut App) {
+    save_and_apply(state, theme, false, cx);
 }
 
 /// Turns system appearance following on, applying the matching Mango theme, or off.
@@ -90,7 +90,7 @@ pub fn set_follow_system(
     let mut appearance = state.read(cx).settings.appearance.clone();
     appearance.follow_system = follow;
     let theme = resolved_theme(&appearance, window.appearance());
-    save_and_apply(state, theme, follow, window, cx);
+    save_and_apply(state, theme, follow, cx);
 }
 
 /// Re-applies the matching Mango theme after the system appearance changes.
@@ -98,24 +98,18 @@ pub fn sync_system_theme(state: &Entity<AppState>, window: &mut Window, cx: &mut
     let appearance = &state.read(cx).settings.appearance;
     let theme = resolved_theme(appearance, window.appearance());
     if appearance.follow_system && theme != appearance.theme {
-        save_and_apply(state, theme, true, window, cx);
+        save_and_apply(state, theme, true, cx);
     }
 }
 
-fn save_and_apply(
-    state: &Entity<AppState>,
-    theme: AppTheme,
-    follow_system: bool,
-    window: &mut Window,
-    cx: &mut App,
-) {
+fn save_and_apply(state: &Entity<AppState>, theme: AppTheme, follow_system: bool, cx: &mut App) {
     state.update(cx, |state, cx| {
         state.settings.appearance.theme = theme;
         state.settings.appearance.follow_system = follow_system;
         state.save_settings();
         cx.notify();
     });
-    apply_theme(theme, window, cx);
+    apply_theme(theme, cx);
 }
 
 // =============================================================================
@@ -128,15 +122,36 @@ pub mod colors {
 
     use crate::models::ConnectionColor;
 
+    /// Palette colors share one OKLCH lightness per theme mode (0.72 dark, 0.56 light), so no
+    /// connection stands out more than another and each clears 3:1 against the panels.
     pub fn connection_accent(color: ConnectionColor, cx: &App) -> Hsla {
-        match color {
-            ConnectionColor::Red => cx.theme().red,
-            ConnectionColor::Yellow => cx.theme().yellow,
-            ConnectionColor::Green => cx.theme().green,
-            ConnectionColor::Cyan => cx.theme().cyan,
-            ConnectionColor::Blue => cx.theme().blue,
-            ConnectionColor::Magenta => cx.theme().magenta,
-        }
+        let (dark, light) = match color {
+            ConnectionColor::Red => (0xF47B74, 0xC04442),
+            ConnectionColor::Orange => (0xEE8545, 0xB65400),
+            ConnectionColor::Amber => (0xDD9314, 0x9F6700),
+            ConnectionColor::Yellow => (0xC2A200, 0x8A7304),
+            ConnectionColor::Lime => (0x8FB43F, 0x628202),
+            ConnectionColor::Green => (0x53BE70, 0x018C3F),
+            ConnectionColor::Teal => (0x04BFA5, 0x068874),
+            ConnectionColor::Cyan => (0x09BAC9, 0x09848F),
+            ConnectionColor::Sky => (0x07B3F0, 0x017FAB),
+            ConnectionColor::Blue => (0x64A6FE, 0x2973D0),
+            ConnectionColor::Indigo => (0x8D9BFF, 0x5D67D0),
+            ConnectionColor::Violet => (0xAE8FF7, 0x7F5BC6),
+            ConnectionColor::Purple => (0xC985E3, 0x9851B2),
+            ConnectionColor::Pink => (0xE37CBF, 0xB0478E),
+            ConnectionColor::Rose => (0xF07998, 0xBD4268),
+            ConnectionColor::Slate => (0x99A6B8, 0x697686),
+            ConnectionColor::Custom(rgb) => (rgb, rgb),
+        };
+        gpui_kit::rgb(if cx.theme().mode.is_dark() { dark } else { light }).into()
+    }
+
+    /// `0xRRGGBB` of a color, without its alpha.
+    pub fn rgb_of(color: Hsla) -> u32 {
+        let rgba = color.to_rgb();
+        let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
+        channel(rgba.r) << 16 | channel(rgba.g) << 8 | channel(rgba.b)
     }
 
     // BSON Syntax Highlighting — reads from active theme's base colors
@@ -296,6 +311,13 @@ pub mod islands {
 mod tests {
     use crate::state::AppTheme;
 
+    #[test]
+    fn rgb_of_reads_back_the_hex() {
+        for rgb in [0x000000, 0xffffff, 0x7c3aed, 0x01ff80, 0xf47b74] {
+            assert_eq!(super::colors::rgb_of(gpui_kit::rgb(rgb).into()), rgb);
+        }
+    }
+
     #[gpui_kit::test]
     fn every_color_theme_uses_the_shared_radius_scale(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
@@ -325,9 +347,7 @@ mod tests {
         cx.update(|cx| {
             gpui_kit::init(cx);
             for (theme, dark) in [(AppTheme::MangoDark, true), (AppTheme::MangoLight, false)] {
-                let config = super::load_theme_config(theme.theme_id()).expect("bundled theme");
-                gpui_kit::component::Theme::global_mut(cx).apply_config(&config);
-                super::apply_design_tokens(cx);
+                super::apply_theme(theme, cx);
                 let base = gpui_kit::base::Theme::global(cx);
                 assert_eq!(
                     base.appearance == gpui_kit::base::ThemeAppearance::Dark,

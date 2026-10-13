@@ -8,6 +8,23 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+### Highlights
+- **Sixteen connection colors, or any color.** Pick from a palette that looks alike in every theme, or open Custom… for any color, and see the connection's tab in it before you click.
+- **A way out of the JSON editor.** The editor in the documents view has a Close button, and Escape closes it when there's nothing to save.
+- **Settings from the sidebar.** A gear in the sidebar header opens Settings.
+
+### Added
+- Connection colors: sixteen colors (red, orange, amber, yellow, lime, green, teal, cyan, sky, blue, indigo, violet, purple, pink, rose and slate), each with a shade for dark themes and one for light themes, and Custom…: a saturation and brightness square, a hue strip and a hex field. Hovering a color shows the connection's tab in it
+- The JSON editor in the documents view has a Close button, and Escape closes it when there's nothing to save. Either goes back to the tree or table it was opened from. With unsaved changes Escape keeps it open, and Close asks first
+- Right-clicking a field offers Edit document JSON, as right-clicking a document does
+- A Settings button in the sidebar header
+
+### Changed
+- Connection colors come from the new palette rather than each theme's own red, blue and so on, so a connection looks the same in every theme. A Magenta connection is now Purple
+- The sidebar is 320px wide by default and at its narrowest, so the header fits the Settings button
+- Charts in AI answers animate in
+- Built on GPUI Kit 0.7.3
+
 ## [0.4.2] - 2026-10-09
 
 ### Highlights

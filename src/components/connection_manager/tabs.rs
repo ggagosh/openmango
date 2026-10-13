@@ -12,6 +12,8 @@ use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Icon, IconName};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -30,37 +32,124 @@ impl ConnectionManager {
     ) -> AnyElement {
         let view = cx.entity();
         let selected_color = self.draft.color;
-        let no_color_button = Button::new("connection-color-none")
-            .xsmall()
-            .label("None")
-            .selected(selected_color.is_none())
-            .on_click({
-                let view = view.clone();
-                move |_, _window, cx| {
-                    view.update(cx, |this, cx| {
-                        this.draft.color = None;
+        let shown_color = self.color_preview.unwrap_or(selected_color);
+        // Every swatch previews its color while hovered and picks it when clicked.
+        let swatch = |color: Option<ConnectionColor>, element: Stateful<Div>| {
+            let (hover_view, click_view) = (view.clone(), view.clone());
+            element
+                .tooltip(move |window, cx| {
+                    Tooltip::new(color.map_or("None", ConnectionColor::label)).build(window, cx)
+                })
+                .on_hover(move |hovered, _, cx| {
+                    hover_view.update(cx, |this, cx| {
+                        if *hovered {
+                            this.color_preview = Some(color);
+                        } else if this.color_preview == Some(color) {
+                            this.color_preview = None;
+                        }
                         cx.notify();
                     });
-                }
+                })
+                .on_click(move |_, _, cx| {
+                    click_view.update(cx, |this, cx| {
+                        this.draft.color = color;
+                        cx.notify();
+                    });
+                })
+        };
+        let ring = cx.theme().foreground;
+        let none_swatch = swatch(
+            None,
+            color_swatch(
+                "connection-color-none",
+                ring,
+                selected_color.is_none(),
+                div()
+                    .size_full()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::new(crate::assets::AppIcon::Ban)
+                            .xsmall()
+                            .text_color(cx.theme().muted_foreground),
+                    ),
+            ),
+        );
+        let custom = selected_color.filter(|color| matches!(color, ConnectionColor::Custom(_)));
+        let color_swatches =
+            ConnectionColor::PALETTE.into_iter().chain(custom).enumerate().map(|(index, color)| {
+                let fill = colors::connection_accent(color, cx);
+                let selected = selected_color == Some(color);
+                swatch(
+                    Some(color),
+                    color_swatch(
+                        ("connection-color", index),
+                        fill,
+                        selected,
+                        div()
+                            .size_full()
+                            .rounded_full()
+                            .bg(fill)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(selected, |dot| {
+                                dot.child(
+                                    Icon::new(gpui_kit::assets::IconName::Check)
+                                        .xsmall()
+                                        .text_color(cx.theme().background),
+                                )
+                            }),
+                    ),
+                )
             });
-        let color_buttons = ConnectionColor::ALL
-            .into_iter()
-            .map(|color| {
-                let accent = colors::connection_accent(color, cx);
-                let view = view.clone();
-                Button::new(("connection-color", color as usize))
-                    .selected(selected_color == Some(color))
-                    .xsmall()
-                    .child(div().size(px(12.0)).rounded_full().bg(accent))
-                    .tooltip(color.label())
-                    .on_click(move |_, _window, cx| {
-                        view.update(cx, |this, cx| {
-                            this.draft.color = Some(color);
-                            cx.notify();
-                        });
-                    })
-            })
-            .collect::<Vec<_>>();
+        let mut color_swatches = color_swatches.collect::<Vec<_>>();
+        let more_color_swatches = color_swatches.split_off(8);
+        let swatch_row = || div().flex().items_center().gap(px(2.0));
+        let custom_picker = self.render_custom_color_button(cx);
+        let preview_name = Some(self.draft.name_state.read(cx).value().trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "New connection".to_string());
+        let preview_identity = crate::components::ConnectionIdentity {
+            id: uuid::Uuid::nil(),
+            name: preview_name.clone(),
+            color: shown_color,
+            environment: self.draft.environment,
+            read_only: self.draft.read_only,
+            confirm_production_writes: false,
+        };
+        let preview_accent = shown_color.map(|color| colors::connection_accent(color, cx));
+        // How a tab of this connection looks: the same icon tint and underline as workspace tabs.
+        let color_preview = div()
+            .flex()
+            .items_center()
+            .gap(spacing::sm())
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Preview"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(spacing::xs())
+                    .px(spacing::sm())
+                    .py(px(3.0))
+                    .rounded_t(px(6.0))
+                    .border_b_2()
+                    .border_color(
+                        preview_accent.map_or(cx.theme().border, |accent| accent.opacity(0.5)),
+                    )
+                    .bg(cx.theme().secondary)
+                    .child(
+                        Icon::new(IconName::LayoutDashboard)
+                            .xsmall()
+                            .text_color(preview_accent.unwrap_or(cx.theme().muted_foreground)),
+                    )
+                    .child(div().text_sm().child(preview_name))
+                    .child(crate::components::connection_identity_tags(&preview_identity, cx)),
+            );
 
         div().flex().flex_col().gap(spacing::lg())
             .child(v_form()
@@ -78,14 +167,24 @@ impl ConnectionManager {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(spacing::xs())
+                    .gap(spacing::sm())
                     .child(
                         div().text_sm().text_color(cx.theme().foreground).child("Connection color"),
                     )
                     .child(
-                        ButtonGroup::new("connection-colors").small().child(no_color_button)
-                            .children(color_buttons),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(swatch_row().child(none_swatch).children(color_swatches))
+                            .child(
+                                swatch_row()
+                                    .child(div().size(px(26.0)))
+                                    .children(more_color_swatches)
+                                    .child(div().px(px(3.0)).child(custom_picker)),
+                            ),
                     )
+                    .child(color_preview)
                     .child(
                         div()
                             .text_xs()
@@ -1016,4 +1115,24 @@ impl ConnectionManager {
             )
             .into_any_element()
     }
+}
+
+/// A round swatch: `content` inside a ring that shows in `ring` when selected, and faintly on
+/// hover, a gap away from it, as in macOS's accent color picker.
+fn color_swatch(
+    id: impl Into<ElementId>,
+    ring: Hsla,
+    selected: bool,
+    content: impl IntoElement,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(px(26.0))
+        .p(px(2.0))
+        .rounded_full()
+        .border_2()
+        .border_color(if selected { ring } else { ring.opacity(0.0) })
+        .when(!selected, |swatch| swatch.hover(|swatch| swatch.border_color(ring.opacity(0.35))))
+        .cursor_pointer()
+        .child(content)
 }

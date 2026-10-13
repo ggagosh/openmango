@@ -98,7 +98,7 @@ fn open_palette(cx: &mut TestAppContext) -> (Entity<ActionBar>, Executed, &mut V
             workspace: cx.focus_handle().tab_stop(true),
             _config: config,
         });
-        Root::new(host, window, cx).bordered(false)
+        Root::new(host, window, cx)
     });
     let bar = bar.unwrap();
     cx.update(|window, cx| bar.update(cx, |bar, cx| bar.toggle(window, cx)));

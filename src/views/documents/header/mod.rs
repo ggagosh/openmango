@@ -424,7 +424,7 @@ mod tests {
         });
         let (_, cx) = cx.add_window_view(|window, cx| {
             let row = cx.new(|_| TitleRow(width));
-            Root::new(row, window, cx).bordered(false)
+            Root::new(row, window, cx)
         });
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));

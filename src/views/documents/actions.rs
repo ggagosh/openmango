@@ -64,6 +64,7 @@ impl CollectionView {
                 return;
             }
             if !this.search_visible {
+                this.close_saved_json_document(window, cx);
                 return;
             }
             this.close_search(window, cx);

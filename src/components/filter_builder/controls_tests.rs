@@ -49,14 +49,16 @@ impl Render for Modes {
 fn group_modes_support_keyboard_and_independent_pointer_selection(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        Theme::global_mut(cx).font_family = crate::theme::fonts::ui().into();
-        Theme::global_mut(cx).font_size = px(16.);
+        Theme::update(cx, |theme| {
+            theme.font_family = crate::theme::fonts::ui().into();
+            theme.font_size = px(16.);
+        });
     });
     let mut modes = None;
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|_| Modes { first: Combinator::Or, second: Combinator::And });
         modes = Some(view.clone());
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     let modes = modes.unwrap();
     cx.update(|window, cx| window.draw(cx).clear(cx));

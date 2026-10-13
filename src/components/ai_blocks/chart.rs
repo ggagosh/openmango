@@ -103,7 +103,7 @@ fn chart_wrapper(
     container.into_any_element()
 }
 
-pub fn render_bar(json: &str, cx: &App) -> Option<AnyElement> {
+pub fn render_bar(json: &str, id: ElementId, cx: &App) -> Option<AnyElement> {
     let chart_data: ChartData = serde_json::from_str(json).ok()?;
     if chart_data.data.is_empty() {
         return None;
@@ -112,6 +112,7 @@ pub fn render_bar(json: &str, cx: &App) -> Option<AnyElement> {
     // Bar charts: x-axis already shows labels, so use a single color and no legend.
     let primary = cx.theme().primary;
     let chart = BarChart::new(chart_data.data.clone())
+        .id(id)
         .band(|d: &DataPoint| d.label.clone())
         .value(|d: &DataPoint| d.value)
         .fill(move |_: &DataPoint, _, _, _| primary);
@@ -119,7 +120,7 @@ pub fn render_bar(json: &str, cx: &App) -> Option<AnyElement> {
     Some(chart_wrapper(chart_data.title.as_deref(), chart.into_any_element(), &[], cx))
 }
 
-pub fn render_pie(json: &str, cx: &App) -> Option<AnyElement> {
+pub fn render_pie(json: &str, id: ElementId, cx: &App) -> Option<AnyElement> {
     let chart_data: ChartData = serde_json::from_str(json).ok()?;
     if chart_data.data.is_empty() {
         return None;
@@ -137,6 +138,7 @@ pub fn render_pie(json: &str, cx: &App) -> Option<AnyElement> {
 
     let colors_for_chart = colors.clone();
     let chart = PieChart::new(indexed.clone())
+        .id(id)
         .value(|d: &IndexedPoint| d.value as f32)
         .color(move |d: &IndexedPoint| colors_for_chart[d.index % colors_for_chart.len()])
         .inner_radius(40.0)
@@ -150,13 +152,14 @@ pub fn render_pie(json: &str, cx: &App) -> Option<AnyElement> {
     Some(chart_wrapper(chart_data.title.as_deref(), chart.into_any_element(), &legend, cx))
 }
 
-pub fn render_line(json: &str, cx: &App) -> Option<AnyElement> {
+pub fn render_line(json: &str, id: ElementId, cx: &App) -> Option<AnyElement> {
     let chart_data: ChartData = serde_json::from_str(json).ok()?;
     if chart_data.data.is_empty() {
         return None;
     }
 
     let chart = LineChart::new(chart_data.data.clone())
+        .id(id)
         .x(|d: &DataPoint| d.label.clone())
         .y(|d: &DataPoint| d.value)
         .stroke(cx.theme().primary)

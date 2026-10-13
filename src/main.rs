@@ -5,7 +5,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use gpui_kit::component::{Root, TitleBar};
+use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 use openmango::app::AppRoot;
 use openmango::assets::{Assets, embedded_fonts};
@@ -51,18 +51,8 @@ fn main() {
             log::warn!("Failed to load embedded fonts: {err}");
         }
 
-        // Load saved appearance.
-
         let saved_theme = theme::resolved_theme(&saved_settings.appearance, cx.window_appearance());
-
-        // Load the saved theme (or default)
-        {
-            if let Some(config) = theme::load_theme_config(saved_theme.theme_id()) {
-                gpui_kit::component::theme::Theme::global_mut(cx).apply_config(&config);
-            }
-        }
-
-        theme::apply_design_tokens(cx);
+        theme::apply_theme(saved_theme, cx);
 
         let workspace = ConfigManager::default().load_workspace().unwrap_or_default();
         let default_bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
@@ -72,7 +62,7 @@ fn main() {
             .map(|state| state.to_bounds())
             .unwrap_or(WindowBounds::Windowed(default_bounds));
 
-        let opened = cx.open_window(
+        let opened = gpui_kit::open_window(
             WindowOptions {
                 app_id: Some("com.openmango.app".into()),
                 #[cfg(target_os = "linux")]
@@ -84,6 +74,7 @@ fn main() {
                 }),
                 ..TitleBar::window_options()
             },
+            cx,
             |window, cx| {
                 #[cfg(target_os = "linux")]
                 window.on_next_frame(|_, _| openmango::helpers::linux::notify_update_ready());
@@ -97,7 +88,7 @@ fn main() {
                     false
                 });
 
-                cx.new(|cx| Root::new(app_view, window, cx))
+                app_view
             },
         );
         // Release GUI builds have no console, so the log is the only place this is visible.
