@@ -7,6 +7,7 @@ use gpui_kit::*;
 
 use super::super::ForgeView;
 use crate::helpers::auto_pair::diff_ranges;
+use crate::helpers::editor_selection::select_range;
 use crate::theme::fonts;
 
 pub struct RawOutputState {
@@ -285,7 +286,7 @@ impl ForgeView {
             if following {
                 input.set_selected_range(text.len()..text.len(), cx);
             } else {
-                input.set_selected_range(next_anchor..next_cursor, cx);
+                select_range(input, next_anchor, next_cursor, window, cx);
             }
             let y = if following {
                 line_height.map(|height| -(height * raw.rows)).unwrap_or(scroll.y)

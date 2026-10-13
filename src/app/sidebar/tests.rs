@@ -49,7 +49,7 @@ fn setup(cx: &mut TestAppContext) -> (Entity<Sidebar>, uuid::Uuid, &mut VisualTe
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| Sidebar::new(state.clone(), window, cx));
         sidebar = Some(view.clone());
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     cx.simulate_resize(size(px(300.0), px(400.0)));
     draw(cx);
@@ -99,7 +99,7 @@ fn scrolled_rows_pin_their_connection_and_database(cx: &mut TestAppContext) {
     // The base font is the app's zoom: rows are sized in rems, so the arithmetic has to hold
     // at a larger font as well as the default one.
     for font in [16.0, 20.0] {
-        cx.update(|_, cx| Theme::global_mut(cx).font_size = px(font));
+        cx.update(|_, cx| Theme::update(cx, |theme| theme.font_size = px(font)));
         // Five rows down is far less than one viewport: arithmetic done in viewports instead
         // of rows would still see row 0 on top and pin nothing.
         sidebar.update(cx, |sidebar, cx| {

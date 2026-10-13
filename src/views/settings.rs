@@ -527,11 +527,10 @@ fn render_appearance_section(
                     menu = menu.label(label);
                     for &theme in themes {
                         let state = state.clone();
-                        menu = menu.item(PopupMenuItem::new(theme.label()).on_click(
-                            move |_, window, cx| {
-                                crate::theme::pick_theme(&state, theme, window, cx)
-                            },
-                        ));
+                        menu =
+                            menu.item(PopupMenuItem::new(theme.label()).on_click(
+                                move |_, _, cx| crate::theme::pick_theme(&state, theme, cx),
+                            ));
                     }
                 }
                 menu

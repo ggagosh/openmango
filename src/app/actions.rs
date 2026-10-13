@@ -218,7 +218,7 @@ impl AppRoot {
             if theme_id == "system" {
                 crate::theme::set_follow_system(state, true, window, cx);
             } else if let Some(theme) = AppTheme::from_theme_id(theme_id) {
-                crate::theme::pick_theme(state, theme, window, cx);
+                crate::theme::pick_theme(state, theme, cx);
             }
             return;
         }

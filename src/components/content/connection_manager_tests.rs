@@ -38,7 +38,7 @@ fn connection_open_requests_create_reuse_and_protect_the_manager(cx: &mut TestAp
         content = Some(view.clone());
         // This is the shared action invoked by the sidebar '+' and New Connection command.
         ConnectionManager::open_new(state.clone(), window, cx);
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     draw(cx);
     let content = content.unwrap();

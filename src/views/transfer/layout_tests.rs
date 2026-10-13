@@ -52,7 +52,7 @@ fn the_transfer_form_is_visible(cx: &mut TestAppContext) {
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ContentArea::new(state.clone(), cx));
         let host = cx.new(|_| Host(view));
-        Root::new(host, window, cx).bordered(false)
+        Root::new(host, window, cx)
     });
     cx.simulate_resize(size(px(1200.0), px(800.0)));
     draw(cx);

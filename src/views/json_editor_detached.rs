@@ -2,7 +2,7 @@
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Disableable as _;
-use gpui_kit::component::Root;
+use gpui_kit::component::IconName;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{Editor, EditorState, InputEvent};
@@ -187,13 +187,20 @@ impl DetachedJsonEditorView {
         editor_state.update(cx, |state, cx| {
             state.set_value(initial_content, window, cx);
         });
+        // Render makes the editor, and it only starts listening for focus once the frame ends;
+        // focusing it before then never starts its caret.
         let focus = editor_state.read(cx).focus_handle(cx);
-        window.focus(&focus, cx);
+        window.defer(cx, move |window, cx| window.focus(&focus, cx));
 
         let sessions = self.sessions.clone();
         let session_id = self.session_id;
         let input_sub =
             cx.subscribe_in(&editor_state, window, move |view, state, event, _window, cx| {
+                // ponytail: gpui-base starts the caret while the window draws, which asks for no
+                // new frame, so it would first show at its second blink, a second later.
+                if matches!(event, InputEvent::Focus) {
+                    cx.notify();
+                }
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }
@@ -544,7 +551,7 @@ impl DetachedJsonEditorView {
         cx.notify();
     }
 
-    fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.save_in_flight {
             self.set_notice(false, "Wait for the current save to finish before closing.");
             cx.notify();
@@ -565,7 +572,7 @@ impl DetachedJsonEditorView {
                 if embedded {
                     if let Some(key) = session_key {
                         state.update(cx, |state, cx| {
-                            state.set_view_mode(&key, crate::state::DocumentViewMode::Tree);
+                            state.close_json_view(&key);
                             cx.notify();
                         });
                     }
@@ -935,7 +942,26 @@ impl Render for DetachedJsonEditorView {
                                             });
                                         }
                                     }),
-                            ),
+                            )
+                            // A window has its own close button; the editor in the documents
+                            // view has none.
+                            .when(self.embedded, |row| {
+                                row.child(
+                                    Button::new("json-editor-close")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .tooltip("Close (Esc when saved)")
+                                        .on_click({
+                                            let view = view.clone();
+                                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                                view.update(cx, |this, cx| {
+                                                    this.request_close_window(window, cx)
+                                                });
+                                            }
+                                        }),
+                                )
+                            }),
                     ),
             )
             .when_some(notice, |this, (is_error, message)| {
@@ -1035,8 +1061,8 @@ pub(crate) fn detach_json_editor(
     }
     match open_detached_json_editor_window(state.clone(), sessions.clone(), session_id, cx) {
         Ok(window) => {
-            focus_window_handle(&window, cx);
-            sessions.register_window(session_id, window.into());
+            focus_window_handle(window, cx);
+            sessions.register_window(session_id, window);
             state.update(cx, |state, cx| {
                 state.set_view_mode(&session.session_key, crate::state::DocumentViewMode::Tree);
                 cx.notify();
@@ -1087,8 +1113,8 @@ pub(crate) fn open_insert_json_editor_with_content(
     let session_id = sessions.create_insert_session(session_key, content);
     match open_detached_json_editor_window(state, sessions.clone(), session_id, cx) {
         Ok(window) => {
-            focus_window_handle(&window, cx);
-            sessions.register_window(session_id, window.into());
+            focus_window_handle(window, cx);
+            sessions.register_window(session_id, window);
         }
         Err(err) => {
             sessions.close(session_id);
@@ -1102,10 +1128,10 @@ fn focus_existing_window(
     session_id: EditorSessionId,
     cx: &mut App,
 ) -> bool {
-    let Some(handle) = sessions.window_handle(session_id) else {
-        return false;
-    };
+    sessions.window_handle(session_id).is_some_and(|handle| focus_window_handle(handle, cx))
+}
 
+fn focus_window_handle(handle: AnyWindowHandle, cx: &mut App) -> bool {
     handle
         .update(cx, |_view, window, cx| {
             window.activate_window();
@@ -1118,23 +1144,12 @@ fn focus_existing_window(
         .is_ok()
 }
 
-fn focus_window_handle(window: &WindowHandle<Root>, cx: &mut App) {
-    let _ = window.update(cx, |_view, window, cx| {
-        window.activate_window();
-        cx.activate(true);
-        window.defer(cx, |window, cx| {
-            window.activate_window();
-            cx.activate(true);
-        });
-    });
-}
-
 fn open_detached_json_editor_window(
     state: Entity<AppState>,
     sessions: EditorSessionStore,
     session_id: EditorSessionId,
     cx: &mut App,
-) -> gpui_kit::Result<WindowHandle<Root>> {
+) -> gpui_kit::Result<AnyWindowHandle> {
     let title = sessions
         .snapshot(session_id)
         .map(|session| session.title())
@@ -1143,13 +1158,14 @@ fn open_detached_json_editor_window(
     let bounds =
         Bounds::centered(None, size(px(DETACHED_WINDOW_WIDTH), px(DETACHED_WINDOW_HEIGHT)), cx);
 
-    cx.open_window(
+    gpui_kit::open_window(
         WindowOptions {
             app_id: Some("com.openmango.app".into()),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions { title: Some(title), ..Default::default() }),
             ..Default::default()
         },
+        cx,
         move |window, cx| {
             let close_sessions = sessions.clone();
             let close_state = state.clone();
@@ -1179,9 +1195,8 @@ fn open_detached_json_editor_window(
 
             let view_state = state.clone();
             let view_sessions = sessions.clone();
-            let editor_view =
-                cx.new(|cx| DetachedJsonEditorView::new(view_state, view_sessions, session_id, cx));
-            cx.new(|cx| Root::new(editor_view, window, cx))
+            cx.new(|cx| DetachedJsonEditorView::new(view_state, view_sessions, session_id, cx))
         },
     )
+    .map(|(handle, _)| handle)
 }

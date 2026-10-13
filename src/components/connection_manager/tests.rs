@@ -30,7 +30,7 @@ fn setup(
     let (_, cx) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| ConnectionManager::new(state.clone(), None, window, cx));
         manager = Some(view.clone());
-        Root::new(view, window, cx).bordered(false)
+        Root::new(view, window, cx)
     });
     draw(cx);
     (state, manager.unwrap(), cx)

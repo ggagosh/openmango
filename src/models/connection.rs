@@ -116,30 +116,104 @@ pub struct ConnectionRuntimeMeta {
     pub before_connect: Option<String>,
 }
 
+/// A connection's accent. A palette color has a shade for dark themes and one for light ones
+/// (`theme::colors::connection_accent`); a custom one is the exact color picked.
+///
+/// Saved as the palette color's name, or as `#rrggbb` for a custom color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(into = "String", try_from = "String")]
 pub enum ConnectionColor {
     Red,
+    Orange,
+    Amber,
     Yellow,
+    Lime,
     Green,
+    Teal,
     Cyan,
+    Sky,
     Blue,
-    Magenta,
+    Indigo,
+    Violet,
+    Purple,
+    Pink,
+    Rose,
+    Slate,
+    /// `0xRRGGBB`.
+    Custom(u32),
 }
 
 impl ConnectionColor {
-    pub const ALL: [Self; 6] =
-        [Self::Red, Self::Yellow, Self::Green, Self::Cyan, Self::Blue, Self::Magenta];
+    pub const PALETTE: [Self; 16] = [
+        Self::Red,
+        Self::Orange,
+        Self::Amber,
+        Self::Yellow,
+        Self::Lime,
+        Self::Green,
+        Self::Teal,
+        Self::Cyan,
+        Self::Sky,
+        Self::Blue,
+        Self::Indigo,
+        Self::Violet,
+        Self::Purple,
+        Self::Pink,
+        Self::Rose,
+        Self::Slate,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Red => "Red",
+            Self::Orange => "Orange",
+            Self::Amber => "Amber",
             Self::Yellow => "Yellow",
+            Self::Lime => "Lime",
             Self::Green => "Green",
+            Self::Teal => "Teal",
             Self::Cyan => "Cyan",
+            Self::Sky => "Sky",
             Self::Blue => "Blue",
-            Self::Magenta => "Magenta",
+            Self::Indigo => "Indigo",
+            Self::Violet => "Violet",
+            Self::Purple => "Purple",
+            Self::Pink => "Pink",
+            Self::Rose => "Rose",
+            Self::Slate => "Slate",
+            Self::Custom(_) => "Custom",
         }
+    }
+}
+
+impl From<ConnectionColor> for String {
+    fn from(color: ConnectionColor) -> Self {
+        match color {
+            ConnectionColor::Custom(rgb) => format!("#{rgb:06x}"),
+            color => color.label().to_ascii_lowercase(),
+        }
+    }
+}
+
+impl TryFrom<String> for ConnectionColor {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if let Some(hex) = value.strip_prefix('#') {
+            return u32::from_str_radix(hex, 16)
+                .ok()
+                .filter(|_| hex.len() == 6)
+                .map(Self::Custom)
+                .ok_or_else(|| format!("invalid connection color `{value}`"));
+        }
+        // Magenta was one of the first six colors.
+        if value == "magenta" {
+            return Ok(Self::Purple);
+        }
+        Self::PALETTE
+            .into_iter()
+            .find(|color| color.label().eq_ignore_ascii_case(&value))
+            .ok_or_else(|| format!("unknown connection color `{value}`"))
     }
 }
 
@@ -388,6 +462,20 @@ mod tests {
         connections.sort_by(|a, b| a.cmp_recent_use(b));
         let names = connections.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
         assert_eq!(names, ["beta", "old", "Alpha"]);
+    }
+
+    #[test]
+    fn connection_colors_keep_their_saved_names() {
+        let saved = |color: ConnectionColor| serde_json::to_value(color).unwrap();
+        assert_eq!(saved(ConnectionColor::Red), "red");
+        assert_eq!(saved(ConnectionColor::Custom(0x7c3aed)), "#7c3aed");
+        for color in ConnectionColor::PALETTE.into_iter().chain([ConnectionColor::Custom(0x0a0b0c)])
+        {
+            assert_eq!(serde_json::from_value::<ConnectionColor>(saved(color)).unwrap(), color);
+        }
+        let read = |value: &str| serde_json::from_value::<ConnectionColor>(value.into());
+        assert_eq!(read("magenta").unwrap(), ConnectionColor::Purple);
+        assert!(read("#12345").is_err() && read("#gggggg").is_err() && read("mauve").is_err());
     }
 
     #[test]

@@ -388,7 +388,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let changelog = cx.new(|cx| ChangelogView::from_notes(state.clone(), NOTES, cx));
             view = Some(changelog.clone());
-            gpui_kit::component::Root::new(changelog, window, cx).bordered(false)
+            gpui_kit::component::Root::new(changelog, window, cx)
         });
         let view = view.unwrap();
         cx.simulate_resize(size(px(900.0), px(700.0)));

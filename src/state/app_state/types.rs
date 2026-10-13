@@ -1314,6 +1314,8 @@ pub struct SessionViewState {
     pub dirty: HashSet<DocumentKey>,
     pub subview: CollectionSubview,
     pub view_mode: DocumentViewMode,
+    /// The view the JSON editor goes back to when it closes.
+    pub json_return_mode: DocumentViewMode,
     pub stats_open: bool,
     pub query_options_open: bool,
     pub filter_builder_open: bool,

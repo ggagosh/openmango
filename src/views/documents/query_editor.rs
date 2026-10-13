@@ -9,6 +9,7 @@ use gpui_kit::component::{ActiveTheme as _, Size};
 use gpui_kit::*;
 use lsp_types::{CompletionContext, CompletionResponse};
 
+use crate::helpers::editor_selection::select_range;
 use crate::views::editor_completion::EditorCompletionMenu;
 
 use super::CollectionView;
@@ -68,10 +69,12 @@ pub(super) fn format_query_editor(
         };
         let scroll = input.scroll_offset();
         input.replace_all(formatted.clone(), window, cx);
-        input.set_selected_range(
-            if reversed { selection.end..selection.start } else { selection },
-            cx,
-        );
+        let (anchor, head) = if reversed {
+            (selection.end, selection.start)
+        } else {
+            (selection.start, selection.end)
+        };
+        select_range(input, anchor, head, window, cx);
         input.set_scroll_offset(scroll, cx);
         formatted
     })
@@ -144,8 +147,11 @@ pub(super) fn correct_query_pointer(
                         && input.text() == &source
                         && input.cursor() == native_end
                     {
-                        input.set_selected_range(
-                            if shift { anchor..target } else { target..target },
+                        select_range(
+                            input,
+                            if shift { anchor } else { target },
+                            target,
+                            window,
                             cx,
                         );
                     }

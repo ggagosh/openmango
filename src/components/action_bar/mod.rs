@@ -111,7 +111,7 @@ impl ActionBar {
             self.previous_focus = window.focused(cx);
         }
         if mode != PaletteMode::Theme {
-            self.revert_theme_preview(window, cx);
+            self.revert_theme_preview(cx);
         } else if self.original_theme.is_none() {
             self.original_theme = Some(self.state.read(cx).settings.appearance.theme);
         }
@@ -148,7 +148,7 @@ impl ActionBar {
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.revert_theme_preview(window, cx);
+        self.revert_theme_preview(cx);
         self.command = None;
         self.mode = PaletteMode::All;
         self.actions.clear();
@@ -179,9 +179,9 @@ impl ActionBar {
         self.hidden = hidden;
     }
 
-    fn revert_theme_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn revert_theme_preview(&mut self, cx: &mut Context<Self>) {
         if let Some(original) = self.original_theme.take() {
-            crate::theme::apply_theme(original, window, cx);
+            crate::theme::apply_theme(original, cx);
         }
     }
 
@@ -196,7 +196,7 @@ impl ActionBar {
             None => None,
         };
         if let Some(theme) = theme {
-            crate::theme::apply_theme(theme, window, cx);
+            crate::theme::apply_theme(theme, cx);
         }
     }
 

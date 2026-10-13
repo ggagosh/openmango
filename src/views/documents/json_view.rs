@@ -4,12 +4,33 @@ use gpui_kit::*;
 
 use crate::bson::{doc_root_id, document_to_json_string};
 use crate::components::{Button, request_unsaved_action};
-use crate::state::{SessionKey, UnsavedScope};
+use crate::state::{CollectionSubview, DocumentViewMode, SessionKey, UnsavedScope};
 use crate::views::json_editor_detached::DetachedJsonEditorView;
 
 use super::CollectionView;
 
 impl CollectionView {
+    /// Escape closes the JSON editor when there is nothing to save; unsaved edits keep it open.
+    pub(super) fn close_saved_json_document(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = self.view_model.current_session() else { return };
+        let Some((session, _, id, editor)) = self.json_document.as_ref() else { return };
+        let state = self.state.read(cx);
+        let sessions = state.editor_sessions();
+        if session != &key
+            || state.session_view_mode(&key) != DocumentViewMode::Json
+            || state.session_subview(&key) != Some(CollectionSubview::Documents)
+            || sessions.is_dirty(*id)
+            || sessions.window_handle(*id).is_some()
+        {
+            return;
+        }
+        editor.clone().update(cx, |editor, cx| editor.request_close_window(window, cx));
+    }
+
     pub(super) fn render_json_document(
         &mut self,
         key: &SessionKey,

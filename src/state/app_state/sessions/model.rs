@@ -224,7 +224,17 @@ impl AppState {
 
     pub fn set_view_mode(&mut self, key: &SessionKey, mode: DocumentViewMode) {
         if let Some(session) = self.session_mut(key) {
+            if mode == DocumentViewMode::Json && session.view.view_mode != DocumentViewMode::Json {
+                session.view.json_return_mode = session.view.view_mode;
+            }
             session.view.view_mode = mode;
+        }
+    }
+
+    /// Closes the JSON editor, back to the view it was opened from.
+    pub fn close_json_view(&mut self, key: &SessionKey) {
+        if let Some(session) = self.session_mut(key) {
+            session.view.view_mode = session.view.json_return_mode;
         }
     }
 

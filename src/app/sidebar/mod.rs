@@ -33,10 +33,10 @@ mod view;
 // Sidebar Component
 // =============================================================================
 
-const SIDEBAR_DEFAULT_WIDTH: Pixels = px(280.0);
-/// Narrower than this, the header's Connections switcher and its four buttons no longer fit on
+const SIDEBAR_DEFAULT_WIDTH: Pixels = px(320.0);
+/// Narrower than this, the header's Connections switcher and its five buttons no longer fit on
 /// one line.
-const SIDEBAR_MIN_WIDTH: Pixels = px(280.0);
+const SIDEBAR_MIN_WIDTH: Pixels = px(320.0);
 const SIDEBAR_MAX_WIDTH: Pixels = px(500.0);
 const KEYBOARD_PREVIEW_DELAY: Duration = Duration::from_millis(140);
 /// Every tree row is exactly this tall. The pinned rows and paging do their arithmetic with

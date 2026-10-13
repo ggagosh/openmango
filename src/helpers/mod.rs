@@ -2,6 +2,7 @@ pub mod auto_pair;
 pub mod background_runner;
 pub mod connection_io;
 pub mod crypto;
+pub mod editor_selection;
 pub mod format;
 pub mod keystore;
 #[cfg(target_os = "linux")]

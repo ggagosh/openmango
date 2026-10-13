@@ -763,7 +763,7 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| {
             let input = cx.new(|cx| InputState::new(window, cx).default_value("value"));
             let rows = cx.new(|_| Rows { input });
-            Root::new(rows, window, cx).bordered(false)
+            Root::new(rows, window, cx)
         });
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -818,7 +818,7 @@ mod tests {
         });
         let (_, cx) = cx.add_window_view(|window, cx| {
             let rows = cx.new(|_| MarkedRows);
-            Root::new(rows, window, cx).bordered(false)
+            Root::new(rows, window, cx)
         });
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear(cx));
