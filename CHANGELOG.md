@@ -8,6 +8,8 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-13
+
 ### Highlights
 - **Sixteen connection colors, or any color.** Pick from a palette that looks alike in every theme, or open Custom… for any color, and see the connection's tab in it before you click.
 - **A way out of the JSON editor.** The editor in the documents view has a Close button, and Escape closes it when there's nothing to save.
