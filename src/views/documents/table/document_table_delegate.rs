@@ -197,6 +197,21 @@ impl TableDelegate for DocumentTableDelegate {
         self.table_cols.column_def(col_ix).clone()
     }
 
+    fn fit_column(
+        &mut self,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> Option<Pixels> {
+        let header = self.column_key(col_ix)?;
+        let cells = (0..self.documents.len()).filter_map(|row_ix| {
+            let linked = self.reference_link(row_ix, col_ix).is_some()
+                || self.incoming_link(row_ix, col_ix).is_some();
+            Some((self.cell_value(row_ix, col_ix)?, linked))
+        });
+        Some(cell_renderer::fit_column_width(&header, cells, window, cx))
+    }
+
     fn render_th(
         &mut self,
         col_ix: usize,

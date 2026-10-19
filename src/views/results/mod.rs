@@ -4,6 +4,7 @@ mod types;
 
 use std::sync::Arc;
 
+use gpui_kit::base::ScrollBounce;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::*;
@@ -73,7 +74,9 @@ pub fn render_results_view<T: 'static>(
         .min_w(px(0.0))
         .min_h(px(0.0))
         .overflow_hidden()
-        .child(
+        .child(ScrollBounce::new(
+            "results-tree-bounce",
+            &props.scroll_handle,
             uniform_list(
                 "results-tree",
                 row_count,
@@ -93,7 +96,7 @@ pub fn render_results_view<T: 'static>(
             )
             .flex_1()
             .track_scroll(&props.scroll_handle),
-        )
+        ))
         // The list scrolls itself; the bar reads the list's own handle.
         .vertical_scrollbar(&props.scroll_handle);
 

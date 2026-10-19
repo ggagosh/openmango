@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use gpui_kit::base::{ScrollBounce, Scrollbar};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -545,7 +546,7 @@ impl Render for Sidebar {
                         let theme_primary = cx.theme().primary;
                         let theme_info = cx.theme().info;
                         let theme_warning = cx.theme().warning;
-                        uniform_list("sidebar-rows", self.model.entries.len(), {
+                        ScrollBounce::new("sidebar-rows-bounce", &scroll_handle, uniform_list("sidebar-rows", self.model.entries.len(), {
                             let state_clone = state_for_tree.clone();
                             let sidebar_entity = sidebar_entity.clone();
                             let connection_accents = connection_accents.clone();
@@ -929,7 +930,9 @@ impl Render for Sidebar {
                         })
                         .flex_grow(1.0)
                         .size_full()
-                        .track_scroll(&scroll_handle)
+                        // Rows stop at the scrollbar's gutter, so a hovered row never runs under the bar.
+                        .pr(Scrollbar::width())
+                        .track_scroll(&scroll_handle))
                         .into_any_element()
                     }),
                     )

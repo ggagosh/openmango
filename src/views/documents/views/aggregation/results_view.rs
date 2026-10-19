@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use gpui_kit::base::ScrollBounce;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button as MenuButton, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::kbd::Kbd;
@@ -611,7 +612,9 @@ fn render_results_tree(
                 .min_w(px(0.0))
                 .min_h(px(0.0))
                 .overflow_hidden()
-                .child(
+                .child(ScrollBounce::new(
+                    "agg-results-tree-bounce",
+                    &view.aggregation_results_scroll,
                     uniform_list(
                         "agg-results-tree",
                         row_count,
@@ -641,7 +644,7 @@ fn render_results_tree(
                     )
                     .flex_1()
                     .track_scroll(&view.aggregation_results_scroll),
-                )
+                ))
                 // The list scrolls itself; the bar reads the list's own handle.
                 .vertical_scrollbar(&view.aggregation_results_scroll),
         )

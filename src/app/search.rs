@@ -1,4 +1,8 @@
+use std::ops::Range;
+
 use gpui_kit::SharedString;
+use gpui_kit::component::input::{highlight_characters, highlight_contains};
+use lsp_types::CompletionItem;
 use uuid::Uuid;
 
 use crate::models::TreeNodeId;
@@ -213,6 +217,18 @@ pub(crate) fn ranked_match_score(query: &str, text: &str) -> Option<usize> {
 
 pub(crate) fn fuzzy_match_score(query: &str, text: &str) -> Option<usize> {
     ranked_match_score(query, text)
+}
+
+/// The bytes of a completion label to paint as matching `query`, the way `ranked_match_score`
+/// finds them: the typed text where it occurs whole, else its letters in order. Kit's default
+/// paints a prefix, which is wrong for a field found by its leaf, like `na` in `user.name`.
+pub(crate) fn completion_match_ranges(query: &str, item: &CompletionItem) -> Vec<Range<usize>> {
+    // A key's replace range can start at its opening quote, which the label leaves out.
+    let query = query.trim_start_matches(['"', '\'']);
+    match highlight_contains(query, item) {
+        ranges if ranges.is_empty() => highlight_characters(query, item),
+        ranges => ranges,
+    }
 }
 
 fn normalize_search_text(text: &str) -> String {
@@ -504,5 +520,15 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "user_profiles");
+    }
+
+    #[test]
+    fn completion_highlight_follows_the_match() {
+        let item = |label: &str| CompletionItem { label: label.into(), ..Default::default() };
+
+        assert_eq!(completion_match_ranges("na", &item("user.name")), vec![5..7]);
+        assert_eq!(completion_match_ranges("\"use", &item("user.name")), vec![0..3]);
+        assert_eq!(completion_match_ranges("usnm", &item("user.name")), vec![0..2, 5..6, 7..8]);
+        assert!(completion_match_ranges("zz", &item("user.name")).is_empty());
     }
 }

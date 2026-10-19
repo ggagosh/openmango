@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -8,6 +9,7 @@ use gpui_kit::*;
 use lsp_types::{CompletionItem, CompletionTextEdit};
 use uuid::Uuid;
 
+use crate::app::search::completion_match_ranges;
 use crate::state::{AppState, CollectionSubview, SessionKey};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -32,6 +34,8 @@ impl CompletionScope {
 struct CompletionRows {
     menu: WeakEntity<EditorCompletionMenu>,
     items: Vec<CompletionItem>,
+    /// Per item, the bytes of its label that match what was typed.
+    matches: Vec<Vec<Range<usize>>>,
     selected: Option<usize>,
     explicit_selection: bool,
 }
@@ -50,6 +54,10 @@ impl ListDelegate for CompletionRows {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let item = self.items.get(index.row)?;
+        let matched = HighlightStyle { color: Some(cx.theme().blue), ..Default::default() };
+        let highlights = self.matches.get(index.row).into_iter().flatten();
+        let label = StyledText::new(item.label.clone())
+            .with_highlights(highlights.map(|range| (range.clone(), matched)));
         Some(
             ListItem::new(index.row).child(
                 div()
@@ -58,7 +66,7 @@ impl ListDelegate for CompletionRows {
                     .gap_2()
                     .w_full()
                     .min_w(px(0.0))
-                    .child(div().flex_1().min_w(px(0.0)).truncate().child(item.label.clone()))
+                    .child(div().flex_1().min_w(px(0.0)).truncate().child(label))
                     .child(
                         div()
                             .text_xs()
@@ -128,6 +136,7 @@ impl EditorCompletionMenu {
                 CompletionRows {
                     menu: owner,
                     items: Vec::new(),
+                    matches: Vec::new(),
                     selected: None,
                     explicit_selection: false,
                 },
@@ -211,12 +220,17 @@ impl EditorCompletionMenu {
         let preserved =
             previous.and_then(|label| items.iter().position(|item| item.label == label));
         let selected = preserved.or_else(|| (!items.is_empty()).then_some(0));
+        let matches = items
+            .iter()
+            .map(|item| completion_match_ranges(&typed_text(&source, cursor, item), item))
+            .collect();
         self.open = !items.is_empty();
         self.source = Some(source);
         self.cursor = cursor;
         self.request_id = request_id;
         self.list.update(cx, |list, cx| {
             list.delegate_mut().items = items;
+            list.delegate_mut().matches = matches;
             list.set_selected_index(selected.map(IndexPath::new), window, cx);
             list.delegate_mut().explicit_selection = preserved.is_some();
             if let Some(selected) = selected {
@@ -317,6 +331,17 @@ impl EditorCompletionMenu {
             true
         })
     }
+}
+
+/// What was typed of the token `item` replaces: from its replace range's start to the caret.
+fn typed_text(source: &Rope, cursor: usize, item: &CompletionItem) -> String {
+    let start = match &item.text_edit {
+        Some(CompletionTextEdit::Edit(edit)) => edit.range.start,
+        Some(CompletionTextEdit::InsertAndReplace(edit)) => edit.replace.start,
+        None => return String::new(),
+    };
+    let start = source.position_to_offset(&start).min(cursor);
+    source.slice(start..cursor).to_string()
 }
 
 impl Render for EditorCompletionMenu {

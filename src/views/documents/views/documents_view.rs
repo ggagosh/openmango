@@ -1,4 +1,4 @@
-use gpui_kit::base::Tree;
+use gpui_kit::base::{ScrollBounce, Tree};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::ButtonVariants as _;
@@ -479,8 +479,9 @@ impl CollectionView {
                                     .into_any_element()
                             } else {
                                 // Kit's styled Tree always reapplies selection. Compose its base
-                                // tree with Kit ListItems so editing can use just the input frame.
-                                div().id("document-tree").relative().size_full().child(Tree::new(&tree_state).item({
+                                // tree with Kit ListItems so editing can use just the input frame. The styled Tree also
+                                // adds the macOS scroll bounce, so it is added here too.
+                                div().id("document-tree").relative().size_full().child(ScrollBounce::new("document-tree-bounce", &tree_scroll, Tree::new(&tree_state).item({
                                     let view = view.clone();
                                     let node_meta = node_meta.clone();
                                     let editing_node_id = editing_node_id.clone();
@@ -522,7 +523,7 @@ impl CollectionView {
                                             cx,
                                         ).into_any_element()
                                     }
-                                }).list_style(StyleRefinement::default().flex_grow_1().size_full()).size_full())
+                                }).list_style(StyleRefinement::default().flex_grow_1().size_full()).size_full()))
                                 .vertical_scrollbar(&tree_scroll)
                                 .into_any_element()
                             }),
