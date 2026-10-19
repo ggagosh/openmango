@@ -1,3 +1,4 @@
+use gpui_kit::base::ScrollBounce;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -384,7 +385,7 @@ impl CompareView {
         let danger = cx.theme().danger;
         panel
             .child(
-                uniform_list(
+                ScrollBounce::new("compare-differences-bounce", &self.scroll, uniform_list(
                     "compare-differences",
                     count,
                     cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
@@ -552,7 +553,7 @@ impl CompareView {
                     }),
                 )
                 .flex_1()
-                .track_scroll(&self.scroll),
+                .track_scroll(&self.scroll)),
             )
             .vertical_scrollbar(&self.scroll)
             .into_any_element()

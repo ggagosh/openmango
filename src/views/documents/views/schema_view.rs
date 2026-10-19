@@ -1,5 +1,6 @@
 //! Schema explorer view — field tree + inspector panel.
 
+use gpui_kit::base::ScrollBounce;
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use std::collections::HashSet;
@@ -188,7 +189,9 @@ pub fn render_schema_panel(
         .min_w(px(0.0))
         .min_h(px(0.0))
         .overflow_hidden()
-        .child(
+        .child(ScrollBounce::new(
+            "schema-tree-bounce",
+            &tree_scroll,
             uniform_list("schema-tree-list", row_count, {
                 let flat_fields = flat_fields.clone();
                 let selected_field = selected_field.clone();
@@ -219,7 +222,7 @@ pub fn render_schema_panel(
             .pb(spacing::sm())
             // Without a handle the list's scroll position has no owner and no bar can be drawn.
             .track_scroll(&tree_scroll),
-        )
+        ))
         .vertical_scrollbar(&tree_scroll);
 
     let toolbar = render_tree_toolbar(

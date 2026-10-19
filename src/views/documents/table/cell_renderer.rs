@@ -102,6 +102,47 @@ pub fn render_cell(value: &Bson, row_ix: usize, col_ix: usize, cx: &App) -> AnyE
     }
 }
 
+/// The width a column's content draws at, for `TableDelegate::fit_column`: the widest of `header`
+/// as the tables' `render_th` draws it and of `cells` as `render_cell` does, where a cell's flag
+/// adds the link arrow drawn after its value. The table adds the cell padding itself.
+pub fn fit_column_width<'a>(
+    header: &str,
+    cells: impl IntoIterator<Item = (&'a Bson, bool)>,
+    window: &Window,
+    cx: &App,
+) -> Pixels {
+    let mut font = window.text_style().font();
+    font.family = cx.theme().font_family.clone();
+    let rem = window.rem_size();
+    let measure = |text: String, size: Rems| {
+        let run = TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        window.text_system().shape_line(text.into(), size.to_pixels(rem), &[run], None).width()
+    };
+    // The header is text_sm, then a gap_1 and the 12px pin icon with 1px padding, then the table's
+    // 0.75rem sort icon with 2px padding.
+    let header = measure(header.to_string(), rems(0.875))
+        + rems(0.25).to_pixels(rem)
+        + px(14.0)
+        + rems(0.75).to_pixels(rem)
+        + px(4.0);
+    // The arrow is an xsmall icon button, 1.25rem square, after the cell's gap.
+    let arrow = spacing::xs() + rems(1.25).to_pixels(rem);
+    cells
+        .into_iter()
+        .map(|(value, linked)| {
+            let text = measure(bson_value_preview(value, CELL_PREVIEW_MAX_LEN), rems(0.75));
+            if linked { text + arrow } else { text }
+        })
+        .fold(header, Pixels::max)
+}
+
 fn format_nested_preview(value: &Bson) -> String {
     let mut preview = String::new();
     append_bson_preview(value, &mut preview, 0);

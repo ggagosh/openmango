@@ -9,6 +9,7 @@ use gpui_kit::component::{ActiveTheme as _, Size};
 use gpui_kit::*;
 use lsp_types::{CompletionContext, CompletionResponse};
 
+use crate::app::search::completion_match_ranges;
 use crate::helpers::editor_selection::select_range;
 use crate::views::editor_completion::EditorCompletionMenu;
 
@@ -20,7 +21,7 @@ pub(super) fn new_query_editor(
     cx: &mut Context<EditorState>,
     placeholder: &'static str,
 ) -> EditorState {
-    EditorState::new(window, cx)
+    let mut state = EditorState::new(window, cx)
         .language("javascript")
         .line_number(false)
         .folding(false)
@@ -30,7 +31,9 @@ pub(super) fn new_query_editor(
         .cursor_surrounding_lines(Some(0))
         .tab_size(TabSize { tab_size: 2, hard_tabs: false })
         .submit_on_enter(true)
-        .placeholder(placeholder)
+        .placeholder(placeholder);
+    state.lsp_mut().set_completion_highlighter(Rc::new(completion_match_ranges));
+    state
 }
 
 /// A one-line plain-text filter field, such as the schema field filter.
@@ -39,7 +42,7 @@ pub(super) fn new_field_filter_editor(
     cx: &mut Context<EditorState>,
     placeholder: &'static str,
 ) -> EditorState {
-    EditorState::new(window, cx)
+    let mut state = EditorState::new(window, cx)
         .language("text")
         .auto_close(false)
         .smart_indent(false)
@@ -51,7 +54,9 @@ pub(super) fn new_field_filter_editor(
         .cursor_surrounding_lines(Some(0))
         .submit_on_enter(true)
         .placeholder(placeholder)
-        .clean_on_escape()
+        .clean_on_escape();
+    state.lsp_mut().set_completion_highlighter(Rc::new(completion_match_ranges));
+    state
 }
 
 pub(super) fn format_query_editor(

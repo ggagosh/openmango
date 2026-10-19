@@ -1,6 +1,7 @@
 //! Database scope: every collection of two databases, paired by name. The list is alphabetical
 //! and never reorders while a scan runs; the detail shares the document diff's columns.
 
+use gpui_kit::base::ScrollBounce;
 use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -545,7 +546,7 @@ impl CompareView {
         let foreground = cx.theme().foreground;
         panel
             .child(
-                uniform_list(
+                ScrollBounce::new("compare-pairs-bounce", &self.scroll, uniform_list(
                     "compare-pairs",
                     count,
                     cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
@@ -680,7 +681,7 @@ impl CompareView {
                     }),
                 )
                 .flex_1()
-                .track_scroll(&self.scroll),
+                .track_scroll(&self.scroll)),
             )
             .vertical_scrollbar(&self.scroll)
             .into_any_element()

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use gpui_kit::base::ScrollBounce;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::{Dialog, DialogFooter};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
@@ -77,7 +78,9 @@ impl Render for DiffTable {
             .min_w_0()
             .w_full()
             .overflow_hidden()
-            .child(
+            .child(ScrollBounce::new(
+                "compare-document-diff-bounce",
+                &self.scroll,
                 uniform_list(
                     "compare-document-diff",
                     self.rows.len(),
@@ -100,7 +103,7 @@ impl Render for DiffTable {
                 .flex_1()
                 .w_full()
                 .track_scroll(&self.scroll),
-            )
+            ))
             .vertical_scrollbar(&self.scroll)
     }
 }
