@@ -145,7 +145,7 @@ Found a bug or have a feature idea? [Open an issue](https://github.com/ggagosh/o
 
 ## Security
 
-Never commit credentials, connection secrets, or machine-specific certificate material.
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). Never commit credentials, connection secrets, or machine-specific certificate material.
 
 ## License
 
