@@ -1,0 +1,77 @@
+name: Fedora RPMs
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [nightly, stable]
+        default: nightly
+        required: true
+  workflow_call:
+    inputs:
+      channel:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ${{ matrix.runner }}
+    # An RPM links against the Fedora release it was built on; build inside that release.
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
+    env:
+      OPENMANGO_RELEASE_CHANNEL: ${{ inputs.channel }}
+      CARGO_INCREMENTAL: 0
+      CARGO_HUSKY_DONT_INSTALL_HOOKS: "true"
+    steps:
+      # checkout, setup-bun and rust-cache need these before they run inside the container.
+      - name: Install Fedora dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            gcc gcc-c++ clang cmake pkgconf-pkg-config perl git curl ca-certificates \
+            tar gzip zstd unzip xz file python3 desktop-file-utils rpm-build \
+            fontconfig-devel libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel \
+            wayland-devel openssl-devel
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # build.rs reads the commit; the workspace belongs to another user inside the container.
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: fedora-rpm-44-${{ matrix.arch }}
+          save-if: false
+      - name: Build RPM
+        run: bash scripts/release_rpm.sh '${{ matrix.target }}'
+      - name: Install and launch-check the RPM
+        run: |
+          dnf install -y dist/OpenMango-*-linux-${{ matrix.arch }}.rpm
+          rpm -V openmango
+          test -x /usr/lib/openmango/bin/mongosh-sidecar
+          /usr/lib/openmango/bin/mongodump --version
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: OpenMango-linux-${{ matrix.arch }}-rpm
+          if-no-files-found: error
+          path: |
+            dist/OpenMango-*-linux-${{ matrix.arch }}.rpm
+            dist/OpenMango-*-linux-${{ matrix.arch }}.rpm.sha256
