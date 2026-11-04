@@ -534,7 +534,7 @@ impl CompareView {
                                                     tab.select_sync_row(
                                                         index,
                                                         modifiers.shift,
-                                                        modifiers.secondary() || modifiers.control,
+                                                        modifiers.secondary(cx) || modifiers.control,
                                                     );
                                                 }
                                                 cx.notify();

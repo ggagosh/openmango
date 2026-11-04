@@ -9,7 +9,7 @@ use gpui_kit::*;
 
 use crate::components::{Button, open_confirm_dialog, request_app_quit};
 use crate::keyboard::{
-    KeybindingCommand, KeybindingIssue, KeybindingIssueSeverity, keybinding_commands,
+    HOST_OS, KeybindingCommand, KeybindingIssue, KeybindingIssueSeverity, keybinding_commands,
     normalize_shortcut, validate_keybinding_override,
 };
 use crate::state::{AppState, StatusMessage};
@@ -584,7 +584,10 @@ fn shortcut_list(shortcuts: &[String], disabled: bool, cx: &App) -> AnyElement {
 fn shortcut_display(shortcut: &str) -> String {
     shortcut
         .split_whitespace()
-        .map(|part| Keystroke::parse(part).map_or_else(|_| part.to_string(), |key| key.to_string()))
+        .map(|part| {
+            Keystroke::parse_with_os(part, HOST_OS)
+                .map_or_else(|_| part.to_string(), |key| key.display(HOST_OS).to_string())
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }

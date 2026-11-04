@@ -218,7 +218,7 @@ pub(crate) fn render_tree_row(
             if let (Some(meta), Some(session_key)) =
                 (range_node_meta.get(&row_item_id), row_session.clone())
             {
-                let is_cmd = event.modifiers.secondary() || event.modifiers.control;
+                let is_cmd = event.modifiers.secondary(cx) || event.modifiers.control;
                 row_state.update(cx, |state, cx| {
                     if is_shift && meta.path.is_empty() {
                         let anchor_ix = anchor.unwrap_or(0);

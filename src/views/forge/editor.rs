@@ -180,7 +180,7 @@ impl ForgeView {
                     WordAction::SelectBackward | WordAction::SelectForward => {
                         let anchor =
                             if cursor == selection.start { selection.end } else { selection.start };
-                        select_range(editor, anchor, target, window, cx);
+                        select_range(editor, anchor, target, cx);
                     }
                     WordAction::MoveBackward | WordAction::MoveForward => {
                         editor.set_selected_range(target..target, cx);

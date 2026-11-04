@@ -2426,7 +2426,7 @@ impl Render for FilterBuilderPanel {
             .on_key_down({
                 let view = view.clone();
                 move |event: &KeyDownEvent, window, cx| match &event.keystroke.key {
-                    key if key == "enter" && event.keystroke.modifiers.secondary() => {
+                    key if key == "enter" && event.keystroke.modifiers.secondary(cx) => {
                         cx.stop_propagation();
                         view.update(cx, |this, cx| this.apply_filter(window, cx));
                     }
@@ -2501,7 +2501,7 @@ impl Render for BulkValueEditor {
                     if key == "escape" {
                         cx.stop_propagation();
                         window.close_dialog(cx);
-                    } else if key == "enter" && event.keystroke.modifiers.secondary() {
+                    } else if key == "enter" && event.keystroke.modifiers.secondary(cx) {
                         cx.stop_propagation();
                         save_bulk_values(&input_state, field_type, &on_save, window, cx);
                     }

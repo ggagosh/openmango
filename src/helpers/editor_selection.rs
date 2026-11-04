@@ -1,43 +1,14 @@
-use gpui_kit::base::actions::{SelectLeft, SelectRight};
+use gpui_kit::Context;
 use gpui_kit::base::input::{InputBaseState, InputModeKind};
-use gpui_kit::*;
 
 /// Selects from `anchor` to `head`, leaving the caret at `head` even when it comes first.
-///
-/// ponytail: gpui-base 0.7.3's `set_selected_range` turns a backwards range into a caret
-/// (`normalize_token_range` tests `Range::is_empty`, which is true for `end < start`), and no other
-/// setter keeps a direction. The editor's own Select Left/Right do, one character per action.
-/// Go back to `set_selected_range(anchor..head)` once upstream accepts backwards ranges.
 pub fn select_range<M: InputModeKind>(
     input: &mut InputBaseState<M>,
     anchor: usize,
     head: usize,
-    window: &mut Window,
     cx: &mut Context<InputBaseState<M>>,
 ) {
-    // Actions reach whatever is focused, so an unfocused input keeps the text selected, forwards.
-    if head >= anchor || !input.focus_handle(cx).is_focused(window) {
-        input.set_selected_range(anchor.min(head)..anchor.max(head), cx);
-        return;
-    }
-    let selected = input.selected_range();
-    let current_anchor =
-        if input.cursor() == selected.start { selected.end } else { selected.start };
-    // Growing a selection a word at a time moves the caret from where it is, not from the anchor.
-    if current_anchor != anchor {
-        input.set_selected_range(anchor..anchor, cx);
-    }
-    let from = input.cursor();
-    let (range, action): (_, Box<dyn Action>) = if head < from {
-        (head..from, Box::new(SelectLeft))
-    } else {
-        (from..head, Box::new(SelectRight))
-    };
-    let skipped = input.text().slice(range).to_string();
-    // The caret steps over a CRLF at once.
-    for _ in 0..skipped.chars().count() - skipped.matches("\r\n").count() {
-        window.dispatch_action(action.boxed_clone(), cx);
-    }
+    input.set_selected_range_with_direction(anchor.min(head)..anchor.max(head), head < anchor, cx);
 }
 
 #[cfg(test)]
@@ -71,8 +42,8 @@ mod tests {
         cx.run_until_parked();
 
         for (anchor, head) in [(16, 10), (16, 3), (16, 12), (3, 9)] {
-            cx.update(|window, cx| {
-                editor.update(cx, |input, cx| super::select_range(input, anchor, head, window, cx))
+            cx.update(|_, cx| {
+                editor.update(cx, |input, cx| super::select_range(input, anchor, head, cx))
             });
             cx.run_until_parked();
             let (range, cursor) =
