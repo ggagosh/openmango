@@ -8,6 +8,8 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-04
+
 ### Highlights
 - **Fit a column to its values.** Double-click a column's edge in the documents or aggregation table to size it to its widest value.
 - **Completions show what matched.** Completion menus color the part of each suggestion that matches what you typed, including a field found by its last part.
