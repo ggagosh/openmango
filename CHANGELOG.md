@@ -8,6 +8,11 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+### Highlights
+- **Fit a column to its values.** Double-click a column's edge in the documents or aggregation table to size it to its widest value.
+- **Completions show what matched.** Completion menus color the part of each suggestion that matches what you typed, including a field found by its last part.
+- **Scrolling that feels like macOS.** Lists, trees, tables and editors bounce at their ends, and a scroll over an editor stays in it.
+
 ### Added
 - Double-click a column's resize handle in the documents or aggregation table to fit the column to its widest value. The width is kept, as a dragged one is
 - Completion menus color the part of each suggestion that matches what you typed, including a field found by its last part, like `na` in `user.name`
