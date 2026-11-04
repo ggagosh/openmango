@@ -224,7 +224,7 @@ fn render_sheet_preview(sheet: &ReportSheet, sheet_idx: usize, show_header: bool
         .w_full()
         .max_h(px(MAX_TABLE_H))
         .overflow_scroll()
-        .on_scroll_wheel(|_, _, cx| {
+        .on_scroll(|_, _, cx| {
             cx.stop_propagation();
         })
         .child(table_content);

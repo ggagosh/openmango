@@ -340,7 +340,7 @@ impl PropertyActionDialog {
         dialog._subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
             let key = event.keystroke.key.as_str();
             if matches!(key, "enter" | "return")
-                && event.keystroke.modifiers.secondary()
+                && event.keystroke.modifiers.secondary(cx)
                 && let Some(dialog) = weak.upgrade()
             {
                 dialog.update(cx, |dialog, cx| dialog.submit(window, cx));

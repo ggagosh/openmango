@@ -54,8 +54,13 @@ pub fn value_details_tooltip(value: &Bson, window: &mut Window, cx: &mut App) ->
     .build(window, cx)
 }
 
+/// The text a cell draws, which is also what `TableDelegate::cell_label` reads to a screen reader.
+pub fn cell_text(value: &Bson) -> String {
+    bson_value_preview(value, CELL_PREVIEW_MAX_LEN)
+}
+
 pub fn render_cell(value: &Bson, row_ix: usize, col_ix: usize, cx: &App) -> AnyElement {
-    let text = bson_value_preview(value, CELL_PREVIEW_MAX_LEN);
+    let text = cell_text(value);
     let color = value_color(value, cx);
     let is_nested = matches!(value, Bson::Document(_) | Bson::Array(_));
 
@@ -137,7 +142,7 @@ pub fn fit_column_width<'a>(
     cells
         .into_iter()
         .map(|(value, linked)| {
-            let text = measure(bson_value_preview(value, CELL_PREVIEW_MAX_LEN), rems(0.75));
+            let text = measure(cell_text(value), rems(0.75));
             if linked { text + arrow } else { text }
         })
         .fold(header, Pixels::max)

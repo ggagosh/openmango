@@ -286,7 +286,7 @@ impl ForgeView {
             if following {
                 input.set_selected_range(text.len()..text.len(), cx);
             } else {
-                select_range(input, next_anchor, next_cursor, window, cx);
+                select_range(input, next_anchor, next_cursor, cx);
             }
             let y = if following {
                 line_height.map(|height| -(height * raw.rows)).unwrap_or(scroll.y)

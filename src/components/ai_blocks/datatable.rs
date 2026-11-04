@@ -152,7 +152,7 @@ pub fn render_datatable(json: &str, id: ElementId, cx: &App) -> Option<AnyElemen
             .rounded(crate::theme::borders::radius_md())
             .bg(cx.theme().table.opacity(0.55))
             .overflow_scroll()
-            .on_scroll_wheel(|_, _, cx| {
+            .on_scroll(|_, _, cx| {
                 cx.stop_propagation();
             })
             .child(table_content)

@@ -79,7 +79,7 @@ pub(super) fn format_query_editor(
         } else {
             (selection.start, selection.end)
         };
-        select_range(input, anchor, head, window, cx);
+        select_range(input, anchor, head, cx);
         input.set_scroll_offset(scroll, cx);
         formatted
     })
@@ -94,7 +94,7 @@ pub(super) fn correct_query_pointer(
     if event.button != MouseButton::Left
         || event.click_count != 1
         || event.modifiers.control
-        || event.modifiers.secondary()
+        || event.modifiers.secondary(cx)
         || event.modifiers.alt
     {
         return;
@@ -152,13 +152,7 @@ pub(super) fn correct_query_pointer(
                         && input.text() == &source
                         && input.cursor() == native_end
                     {
-                        select_range(
-                            input,
-                            if shift { anchor } else { target },
-                            target,
-                            window,
-                            cx,
-                        );
+                        select_range(input, if shift { anchor } else { target }, target, cx);
                     }
                 });
             }
@@ -276,7 +270,7 @@ impl CollectionView {
         if self.filter_state.is_none() {
             return false;
         }
-        let command = key.modifiers.secondary() || key.modifiers.control;
+        let command = key.modifiers.secondary(cx) || key.modifiers.control;
         let key_name = key.key.to_ascii_lowercase();
         let newline = key.modifiers.shift && matches!(key_name.as_str(), "enter" | "return");
         if ((command && matches!(key_name.as_str(), "z" | "y" | "x" | "v")) || newline)

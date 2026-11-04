@@ -174,6 +174,10 @@ impl TableDelegate for AggregationTableDelegate {
         Some(cell_renderer::fit_column_width(&header, cells, window, cx))
     }
 
+    fn cell_label(&self, row_ix: usize, col_ix: usize, _cx: &App) -> Option<SharedString> {
+        self.cell_value(row_ix, col_ix).map(|value| cell_renderer::cell_text(value).into())
+    }
+
     fn render_th(
         &mut self,
         col_ix: usize,
@@ -269,7 +273,7 @@ impl TableDelegate for AggregationTableDelegate {
                 cx.stop_propagation();
 
                 let is_shift = event.modifiers.shift;
-                let is_cmd = event.modifiers.secondary() || event.modifiers.control;
+                let is_cmd = event.modifiers.secondary(cx) || event.modifiers.control;
 
                 if is_shift {
                     let anchor = ts.delegate().anchor_row.unwrap_or(0);

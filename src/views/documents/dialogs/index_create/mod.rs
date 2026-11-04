@@ -150,7 +150,7 @@ impl IndexCreateDialog {
         let weak = cx.entity().downgrade();
         dialog._subscriptions.push(cx.intercept_keystrokes(move |event, window, cx| {
             if matches!(event.keystroke.key.as_str(), "enter" | "return")
-                && event.keystroke.modifiers.secondary()
+                && event.keystroke.modifiers.secondary(cx)
                 && let Some(view) = weak.upgrade()
             {
                 IndexCreateDialog::submit(view, window, cx);

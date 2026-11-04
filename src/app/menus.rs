@@ -98,7 +98,12 @@ fn menu_item_with_shortcut(
     window: &Window,
 ) -> PopupMenuItem {
     let shortcut = window.highest_precedence_binding_for_action(action).map(|binding| {
-        binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")
+        binding
+            .keystrokes()
+            .iter()
+            .map(|key| key.display(crate::keyboard::HOST_OS).to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
     });
     let icon: Icon = match label {
         "Open Forge" => IconName::SquareTerminal.into(),

@@ -1,2 +1,4 @@
 [toolchain]
-channel = "stable"
+channel = "1.99.1"
+# CI installs the pinned toolchain with the minimal profile, which has neither.
+components = ["rustfmt", "clippy"]

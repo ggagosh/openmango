@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use gpui_kit::{
-    Action, App, AsKeystroke as _, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate,
-    KeyContext, Keystroke, actions,
+    Action, App, AsKeystroke as _, KeyBinding, KeyBindingContextPredicate, KeyContext, Keystroke,
+    OperatingSystem, actions,
 };
 
 use crate::state::KeybindingSettings;
@@ -162,9 +162,18 @@ const DOCUMENT_EDIT_CONTEXT: &str = "Documents && !Input && !Aggregation";
 /// Set on the aggregation stage list, so list keys never fire while results or editors have focus.
 pub const AGGREGATION_STAGES_CONTEXT: &str = "AggregationStages";
 const FOCUS_CONTENT_KEYS: [&str; 2] = ["cmd-shift-1", "ctrl-shift-1"];
+/// Spells shortcuts in settings and resolves a typed `secondary-`. Every desktop build runs on the
+/// OS it was built for, so this is what `cx.platform_info().os` reports.
+pub(crate) const HOST_OS: OperatingSystem = if cfg!(target_os = "macos") {
+    OperatingSystem::Mac
+} else if cfg!(target_os = "windows") {
+    OperatingSystem::Windows
+} else {
+    OperatingSystem::Linux
+};
 
 pub fn bind_keymap(cx: &mut App, settings: &KeybindingSettings) {
-    let (bindings, errors) = effective_keybindings(settings);
+    let (bindings, errors) = effective_keybindings(settings, cx);
     for error in errors {
         log::error!("Ignoring invalid keybinding override: {error}");
     }
@@ -253,35 +262,19 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-alt-f", OpenForge, Some("Workspace")),
         KeyBinding::new("cmd-enter", RunForgeAll, Some("ForgeView")),
         KeyBinding::new("cmd-return", RunForgeAll, Some("ForgeView")),
-        KeyBinding::new("secondary-enter", RunForgeAll, Some("ForgeView")),
-        KeyBinding::new("secondary-return", RunForgeAll, Some("ForgeView")),
         KeyBinding::new("ctrl-enter", RunForgeAll, Some("ForgeView")),
         KeyBinding::new("ctrl-return", RunForgeAll, Some("ForgeView")),
         KeyBinding::new("cmd-shift-enter", RunForgeSelectionOrStatement, Some("ForgeView")),
         KeyBinding::new("cmd-shift-return", RunForgeSelectionOrStatement, Some("ForgeView")),
-        KeyBinding::new("secondary-shift-enter", RunForgeSelectionOrStatement, Some("ForgeView")),
-        KeyBinding::new("secondary-shift-return", RunForgeSelectionOrStatement, Some("ForgeView")),
         KeyBinding::new("ctrl-shift-enter", RunForgeSelectionOrStatement, Some("ForgeView")),
         KeyBinding::new("ctrl-shift-return", RunForgeSelectionOrStatement, Some("ForgeView")),
         KeyBinding::new("cmd-enter", RunForgeAll, Some("ForgeView > Input")),
         KeyBinding::new("cmd-return", RunForgeAll, Some("ForgeView > Input")),
-        KeyBinding::new("secondary-enter", RunForgeAll, Some("ForgeView > Input")),
-        KeyBinding::new("secondary-return", RunForgeAll, Some("ForgeView > Input")),
         KeyBinding::new("ctrl-enter", RunForgeAll, Some("ForgeView > Input")),
         KeyBinding::new("ctrl-return", RunForgeAll, Some("ForgeView > Input")),
         KeyBinding::new("cmd-shift-enter", RunForgeSelectionOrStatement, Some("ForgeView > Input")),
         KeyBinding::new(
             "cmd-shift-return",
-            RunForgeSelectionOrStatement,
-            Some("ForgeView > Input"),
-        ),
-        KeyBinding::new(
-            "secondary-shift-enter",
-            RunForgeSelectionOrStatement,
-            Some("ForgeView > Input"),
-        ),
-        KeyBinding::new(
-            "secondary-shift-return",
             RunForgeSelectionOrStatement,
             Some("ForgeView > Input"),
         ),
@@ -499,16 +492,10 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-alt-5", ShowSchemaSubview, Some("Documents")),
         KeyBinding::new("cmd-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-enter", RunAggregation, Some("Documents && Aggregation")),
-        KeyBinding::new("secondary-enter", RunAggregation, Some("Documents && Aggregation")),
         // Bound on the editor as well: the input's own secondary-enter inserts a newline and then
         // lets the key fall through, so without these the pipeline runs and the stage gains a line.
         KeyBinding::new("cmd-enter", RunAggregation, Some("Documents && Aggregation > Input")),
         KeyBinding::new("ctrl-enter", RunAggregation, Some("Documents && Aggregation > Input")),
-        KeyBinding::new(
-            "secondary-enter",
-            RunAggregation,
-            Some("Documents && Aggregation > Input"),
-        ),
         KeyBinding::new("cmd-shift-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("ctrl-shift-enter", RunAggregation, Some("Documents && Aggregation")),
         KeyBinding::new("cmd-shift-f", FormatAggregationStage, Some("Documents && Aggregation")),
@@ -746,13 +733,18 @@ pub fn normalize_shortcut(shortcut: &str) -> Result<String, String> {
     shortcut
         .split_whitespace()
         .map(|part| {
-            Keystroke::parse(part).map(|key| key.unparse()).map_err(|error| error.to_string())
+            Keystroke::parse_with_os(part, HOST_OS)
+                .map(|key| key.unparse(HOST_OS))
+                .map_err(|error| error.to_string())
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|parts| parts.join(" "))
 }
 
-fn effective_keybindings(settings: &KeybindingSettings) -> (Vec<KeyBinding>, Vec<String>) {
+fn effective_keybindings(
+    settings: &KeybindingSettings,
+    cx: &App,
+) -> (Vec<KeyBinding>, Vec<String>) {
     let mut bindings = Vec::new();
     let mut errors = Vec::new();
     for spec in binding_specs() {
@@ -777,7 +769,7 @@ fn effective_keybindings(settings: &KeybindingSettings) -> (Vec<KeyBinding>, Vec
                 context.clone(),
                 false,
                 None,
-                &DummyKeyboardMapper,
+                cx,
             ) {
                 Ok(binding) => bindings.push(binding),
                 Err(error) => errors.push(format!("{} ({shortcut}): {error}", spec.label)),
@@ -798,7 +790,7 @@ fn binding_specs() -> Vec<BindingSpec> {
         let shortcut = binding
             .keystrokes()
             .iter()
-            .map(|keystroke| keystroke.inner().unparse())
+            .map(|keystroke| keystroke.inner().unparse(HOST_OS))
             .collect::<Vec<_>>()
             .join(" ");
         if let Some(index) = indexes.get(&key).copied() {
@@ -893,13 +885,11 @@ fn binding_category(context: Option<&str>) -> &'static str {
 fn canonical_conflict_key(shortcut: &str) -> String {
     shortcut
         .split_whitespace()
+        // Shortcuts arrive normalized, so `secondary-` is already the platform's own modifier.
         .map(|part| {
-            let part = if cfg!(target_os = "macos") {
-                part.replace("secondary-", "cmd-")
-            } else {
-                part.replace("secondary-", "ctrl-")
-            };
-            part.strip_suffix("return").map(|prefix| format!("{prefix}enter")).unwrap_or(part)
+            part.strip_suffix("return")
+                .map(|prefix| format!("{prefix}enter"))
+                .unwrap_or(part.into())
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -983,7 +973,7 @@ fn context_samples() -> Vec<Vec<KeyContext>> {
 mod tests {
     use std::collections::HashSet;
 
-    use gpui_kit::{KeyBindingContextPredicate, KeyContext};
+    use gpui_kit::{KeyBindingContextPredicate, KeyContext, TestAppContext};
 
     use super::*;
 
@@ -1026,8 +1016,12 @@ mod tests {
 
         for binding in default_keybindings() {
             let Some(predicate) = binding.predicate() else { continue };
-            let keys: String =
-                binding.keystrokes().iter().map(ToString::to_string).collect::<Vec<_>>().join(" ");
+            let keys: String = binding
+                .keystrokes()
+                .iter()
+                .map(|key| key.unparse(HOST_OS))
+                .collect::<Vec<_>>()
+                .join(" ");
             if keys != "cmd-f" && keys != "ctrl-f" {
                 continue;
             }
@@ -1108,7 +1102,7 @@ mod tests {
             .iter()
             .filter(|binding| binding.action().name().ends_with("RunAggregation"))
             .filter(|binding| {
-                normalize_shortcut(&binding.keystrokes()[0].inner().unparse())
+                normalize_shortcut(&binding.keystrokes()[0].inner().unparse(HOST_OS))
                     == normalize_shortcut("secondary-enter")
             })
             .filter_map(|binding| binding.predicate()?.depth_of(&contexts))
@@ -1150,11 +1144,12 @@ mod tests {
         assert!(modal.depth_of(&modal_contexts).is_some());
     }
 
-    #[test]
-    fn default_catalog_has_unique_ids_and_compiles() {
+    #[gpui_kit::test]
+    fn default_catalog_has_unique_ids_and_compiles(cx: &mut TestAppContext) {
         let commands = keybinding_commands(&KeybindingSettings::default());
         let ids = commands.iter().map(|command| command.id.as_str()).collect::<HashSet<_>>();
-        let (bindings, errors) = effective_keybindings(&KeybindingSettings::default());
+        let (bindings, errors) =
+            cx.update(|cx| effective_keybindings(&KeybindingSettings::default(), cx));
 
         assert_eq!(ids.len(), commands.len());
         assert!(errors.is_empty(), "{errors:?}");
@@ -1181,36 +1176,37 @@ mod tests {
         assert!(!disjoint.iter().any(|issue| issue.severity == KeybindingIssueSeverity::Error));
     }
 
-    #[test]
-    fn disabled_and_custom_overrides_replace_defaults() {
+    #[gpui_kit::test]
+    fn disabled_and_custom_overrides_replace_defaults(cx: &mut TestAppContext) {
         let mut settings = KeybindingSettings::default();
         settings.overrides.insert("open-action-bar.workspace".into(), Some("cmd-alt-z".into()));
         settings.overrides.insert("open-settings.workspace".into(), None);
 
-        let (bindings, errors) = effective_keybindings(&settings);
+        let (bindings, errors) = cx.update(|cx| effective_keybindings(&settings, cx));
         assert!(errors.is_empty(), "{errors:?}");
         let action_bar = bindings
             .iter()
             .filter(|binding| binding.action().name().ends_with("OpenActionBar"))
             .flat_map(|binding| {
-                binding.keystrokes().iter().map(|keystroke| keystroke.inner().unparse())
+                binding.keystrokes().iter().map(|keystroke| keystroke.inner().unparse(HOST_OS))
             })
             .collect::<Vec<_>>();
         assert_eq!(action_bar, vec![normalize_shortcut("cmd-alt-z").unwrap()]);
         assert!(bindings.iter().all(|binding| !binding.action().name().ends_with("OpenSettings")));
     }
 
-    #[test]
-    fn palette_hint_uses_the_platform_modifier_over_the_alias() {
-        let (bindings, _) = effective_keybindings(&KeybindingSettings::default());
+    #[gpui_kit::test]
+    fn palette_hint_uses_the_platform_modifier_over_the_alias(cx: &mut TestAppContext) {
+        let (bindings, _) =
+            cx.update(|cx| effective_keybindings(&KeybindingSettings::default(), cx));
         let palette = bindings
             .into_iter()
             .filter(|binding| binding.action().name().ends_with("OpenActionBar"))
             .collect::<Vec<_>>();
         // GPUI's own pick is the last binding added, which is the Ctrl variant.
-        assert_eq!(palette.last().unwrap().keystrokes()[0].inner().unparse(), "ctrl-k");
+        assert_eq!(palette.last().unwrap().keystrokes()[0].inner().unparse(HOST_OS), "ctrl-k");
         let expected = if cfg!(target_os = "macos") { "cmd-k" } else { "ctrl-k" };
-        assert_eq!(display_keystroke(&palette).unwrap().unparse(), expected);
+        assert_eq!(display_keystroke(&palette).unwrap().unparse(HOST_OS), expected);
     }
 
     #[test]

@@ -8,17 +8,24 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+### Highlights
+- **Fit a column to its values.** Double-click a column's edge in the documents or aggregation table to size it to its widest value.
+- **Completions show what matched.** Completion menus color the part of each suggestion that matches what you typed, including a field found by its last part.
+- **Scrolling that feels like macOS.** Lists, trees, tables and editors bounce at their ends, and a scroll over an editor stays in it.
+
 ### Added
 - Double-click a column's resize handle in the documents or aggregation table to fit the column to its widest value. The width is kept, as a dragged one is
 - Completion menus color the part of each suggestion that matches what you typed, including a field found by its last part, like `na` in `user.name`
+- Screen readers read the value in each cell of the documents and aggregation tables
 
 ### Changed
 - Lists, trees, tables, editors and scrolling panels bounce at their ends on macOS, and a scroll over an editor stays in it instead of moving what's around it
 - Query editors, Forge and the JSON editor use a lighter syntax highlighter, so some colors may look slightly different
-- Built on GPUI Kit 0.8.0
+- Built on GPUI Kit 0.9.0
 
 ### Fixed
 - A hovered or selected row in the sidebar stops at the scrollbar instead of running under it
+- Dragging a table column's edge resizes it from where the drag started, so the column no longer jumps
 
 ## [0.4.3] - 2026-10-13
 

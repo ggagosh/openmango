@@ -141,7 +141,7 @@ pub fn on_incoming_mouse_down(
     link: IncomingLink,
 ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
     move |event, _window, cx| {
-        if !(event.modifiers.secondary() || event.modifiers.control) || event.click_count != 1 {
+        if !(event.modifiers.secondary(cx) || event.modifiers.control) || event.click_count != 1 {
             return;
         }
         cx.stop_propagation();
@@ -175,7 +175,7 @@ pub fn on_reference_mouse_down(
     link: ReferenceLink,
 ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
     move |event, _window, cx| {
-        if !(event.modifiers.secondary() || event.modifiers.control) || event.click_count != 1 {
+        if !(event.modifiers.secondary(cx) || event.modifiers.control) || event.click_count != 1 {
             return;
         }
         cx.stop_propagation();

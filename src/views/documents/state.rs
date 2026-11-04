@@ -151,7 +151,7 @@ impl CollectionView {
             };
             let key = event.keystroke.key.to_ascii_lowercase();
             let modifiers = event.keystroke.modifiers;
-            let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
+            let cmd_or_ctrl = modifiers.secondary(cx) || modifiers.control;
             let is_escape = key == "escape";
             let is_enter = key == "enter" || key == "return";
 
@@ -245,7 +245,7 @@ impl CollectionView {
                     }
                 } else if is_enter {
                     let modifiers = event.keystroke.modifiers;
-                    let cmd_or_ctrl = modifiers.secondary() || modifiers.control;
+                    let cmd_or_ctrl = modifiers.secondary(cx) || modifiers.control;
                     if !cmd_or_ctrl
                         && this.view_model.inline_state().is_some()
                         && !this.documents_focus.is_focused(window)

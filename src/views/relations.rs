@@ -316,9 +316,9 @@ impl RelationsView {
         cx.notify();
     }
 
-    fn on_scroll(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+    fn on_scroll(&mut self, event: &ScrollEvent, cx: &mut Context<Self>) {
         let delta = event.delta.pixel_delta(px(20.0));
-        if event.modifiers.secondary() || event.modifiers.control {
+        if event.modifiers.secondary(cx) || event.modifiers.control {
             self.zoom_about(self.local(event.position), (f32::from(delta.y) * 0.004).exp());
         } else {
             self.pan += delta;
@@ -725,7 +725,7 @@ impl RelationsView {
                 MouseButton::Left,
                 cx.listener(|this, _, _window, cx| this.on_mouse_up(cx)),
             )
-            .on_scroll_wheel(cx.listener(|this, event, _window, cx| this.on_scroll(event, cx)))
+            .on_scroll(cx.listener(|this, event, _window, cx| this.on_scroll(event, cx)))
             // Moves stop arriving once the pointer leaves, so the last card would stay lit.
             .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
                 if !hovered && this.hovered.take().is_some() {
