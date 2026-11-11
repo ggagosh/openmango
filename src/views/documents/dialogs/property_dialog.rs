@@ -539,6 +539,12 @@ impl PropertyActionDialog {
                         "Update every document matching this filter in {database}.{collection}? {count} document{} currently match. This cannot be undone.\n\nFilter: {filter_text}",
                         if count == 1 { "" } else { "s" }
                     );
+                    let preview = crate::components::WritePreview::new(&session_key.database)
+                        .statement(
+                            &session_key.collection,
+                            "updateMany",
+                            [filter.clone().into(), update_doc.clone().into()],
+                        );
                     request_connection_write(
                         state.clone(),
                         crate::components::WriteRequest::new(
@@ -551,7 +557,8 @@ impl PropertyActionDialog {
                             confirm_label: "Update".into(),
                             destructive: true,
                         }),
-                        ),
+                        )
+                        .with_preview(preview),
                         window,
                         cx,
                         move |_window, cx| {

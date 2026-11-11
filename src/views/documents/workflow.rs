@@ -45,6 +45,18 @@ impl CollectionView {
         }
         let state = self.state.clone();
         let count = documents.len();
+        let preview = documents.iter().fold(
+            crate::components::WritePreview::new(&key.database),
+            |preview, (doc_key, draft)| {
+                let loaded = state.read(cx).document_edit_baseline(&key, doc_key);
+                match (loaded, draft.get("_id")) {
+                    (Some(loaded), Some(id)) => {
+                        preview.save_edit(&key.collection, id.clone(), &loaded, draft)
+                    }
+                    _ => preview,
+                }
+            },
+        );
         crate::components::request_connection_write(
             state.clone(),
             crate::components::WriteRequest::new(
@@ -53,7 +65,8 @@ impl CollectionView {
                 format!("Save {count} document(s)"),
                 None,
             )
-            .for_writes(count),
+            .for_writes(count)
+            .with_preview(preview),
             window,
             cx,
             move |_, cx| {

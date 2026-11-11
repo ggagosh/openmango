@@ -128,6 +128,27 @@ pub async fn replace_document_if_current_async(
     }
 }
 
+/// Applies an edit's field update; when its guard matches nothing, reads the document again to
+/// say whether it was deleted or which edited field someone else changed.
+pub async fn update_document_if_unchanged_async(
+    client: &Client,
+    database: &str,
+    collection: &str,
+    id: mongodb::bson::Bson,
+    update: crate::bson::FieldUpdate,
+) -> Result<()> {
+    let coll = client.database(database).collection::<Document>(collection);
+    let result = coll.update_one(update.filter.clone(), update.update.clone()).await?;
+    if result.matched_count == 1 {
+        return Ok(());
+    }
+    let current = coll.find_one(doc! { "_id": id }).await?;
+    Err(crate::error::Error::Conflict(crate::bson::field_update_conflict(
+        &update,
+        current.as_ref(),
+    )))
+}
+
 impl ConnectionManager {
     /// Find documents in a collection with pagination (runs in Tokio runtime)
     pub fn find_documents(

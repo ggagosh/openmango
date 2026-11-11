@@ -8,6 +8,18 @@ Each release opens with `### Highlights`: at most five `- **Title.** One sentenc
 
 ## [Unreleased]
 
+### Added
+- Double-click a table cell to edit it. Text, numbers, ids and dates edit in the cell, with a calendar and hour, minute and second boxes for dates; booleans flip; nested values and multi-line text open the Edit value / type dialog. Tab and Shift+Tab move to the next or previous cell, and changed cells are tinted until saved
+- Confirming a write to a Production connection shows the fields it changes, old next to new, and the statement it runs, folded and shortened for large documents, with Copy all for the exact text
+
+### Changed
+- Saving a field edit updates only the fields that changed, each checked against its value and type as loaded. Someone else's change to another field no longer blocks the save, and a conflict names the field that changed. The JSON editor still replaces the whole document
+- The hover card on document and array cells is laid out like the JSON view instead of one long line
+
+### Fixed
+- The table view no longer shows columns from the previously opened collection
+- The Stage change button in the Edit value / type dialog no longer clips
+
 ## [0.4.4] - 2026-11-04
 
 ### Highlights

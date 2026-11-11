@@ -300,6 +300,18 @@ impl DetachedJsonEditorView {
 
         let state = self.state.clone();
         let view = cx.entity();
+        // Contents that do not parse get no preview; saving reports them.
+        let preview = self
+            .editor_state
+            .as_ref()
+            .and_then(|editor| parse_document_from_json(&editor.read(cx).value()).ok())
+            .map(|document| {
+                crate::components::WritePreview::new(&session.session_key.database).statement(
+                    &session.session_key.collection,
+                    "insertOne",
+                    [document.into()],
+                )
+            });
         request_connection_write(
             state,
             crate::components::WriteRequest::new(
@@ -307,7 +319,8 @@ impl DetachedJsonEditorView {
                 session.session_key.namespace(),
                 "Save the document editor contents",
                 None,
-            ),
+            )
+            .with_preview(preview),
             window,
             cx,
             move |_window, cx| {
@@ -461,6 +474,14 @@ impl DetachedJsonEditorView {
                             };
                             let view_for_save = view.clone();
                             let _ = window_handle.update(cx, move |_root, window, cx| {
+                                let preview =
+                                    crate::components::WritePreview::new(&session_key.database)
+                                        .replace_if_current(
+                                            &session_key.collection,
+                                            updated_document.get("_id").cloned().unwrap_or_default(),
+                                            &baseline_document,
+                                            &updated_document,
+                                        );
                                 request_connection_write(
                                     state,
                                     crate::components::WriteRequest::new(
@@ -468,7 +489,8 @@ impl DetachedJsonEditorView {
                                         session_key.namespace(),
                                         "Save the document editor contents",
                                         None,
-                                    ),
+                                    )
+                                    .with_preview(preview),
                                     window,
                                     cx,
                                     move |_window, cx| {
@@ -716,6 +738,8 @@ impl DetachedJsonEditorView {
 
         let state = self.state.clone();
         let view = cx.entity();
+        let preview = crate::components::WritePreview::new(&session.session_key.database)
+            .statement(&session.session_key.collection, "insertOne", [document.clone().into()]);
         request_connection_write(
             state,
             crate::components::WriteRequest::new(
@@ -723,7 +747,8 @@ impl DetachedJsonEditorView {
                 session.session_key.namespace(),
                 "Create the editor contents as a new document",
                 None,
-            ),
+            )
+            .with_preview(preview),
             window,
             cx,
             move |_window, cx| {

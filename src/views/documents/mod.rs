@@ -167,7 +167,11 @@ pub(crate) fn request_delete_confirmation(
                         confirm_label: "Delete".into(),
                         destructive: true,
                     }),
-                    ),
+                    )
+                    .with_preview(crate::components::WritePreview::delete_many(
+                        &session_key,
+                        &filter,
+                    )),
                     window,
                     cx,
                     move |_window, cx| {

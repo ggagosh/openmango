@@ -10,6 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use uuid::Uuid;
 
+use crate::components::write_preview::{WritePreview, WritePreviewView};
 use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
 use crate::models::ConnectionWriteIdentity;
 use crate::state::{AppState, StatusMessage};
@@ -30,6 +31,7 @@ pub struct WriteRequest {
     pub operation: String,
     pub confirmation: Option<WriteConfirmation>,
     authorization_uses: usize,
+    preview: Option<WritePreview>,
 }
 
 impl WriteRequest {
@@ -45,7 +47,14 @@ impl WriteRequest {
             operation: operation.into(),
             confirmation,
             authorization_uses: 1,
+            preview: None,
         }
+    }
+
+    /// What the write changes and the statements it runs, for its confirmation to show.
+    pub fn with_preview(mut self, preview: impl Into<Option<WritePreview>>) -> Self {
+        self.preview = preview.into();
+        self
     }
 
     pub fn for_writes(mut self, uses: usize) -> Self {
@@ -82,8 +91,14 @@ pub fn request_connection_write(
     cx: &mut App,
     on_confirm: impl FnOnce(&mut Window, &mut App) + 'static,
 ) {
-    let WriteRequest { connection_id, target, operation, confirmation, authorization_uses } =
-        request;
+    let WriteRequest {
+        connection_id,
+        target,
+        operation,
+        confirmation,
+        authorization_uses,
+        preview,
+    } = request;
     let Some(connection) = state.read(cx).connection_by_id(connection_id).cloned() else {
         state.update(cx, |state, cx| {
             state.set_status_message(Some(StatusMessage::error(
@@ -130,6 +145,7 @@ pub fn request_connection_write(
                 cx,
                 confirmation,
                 Some(identity.clone()),
+                preview,
                 Box::new(move |window, cx| {
                     let allowed = state_for_confirm
                         .read(cx)
@@ -223,6 +239,7 @@ pub fn open_confirm_dialog(
             destructive,
         },
         None,
+        None,
         Box::new(on_confirm),
     );
 }
@@ -232,9 +249,11 @@ fn open_confirm_dialog_boxed(
     cx: &mut App,
     confirmation: WriteConfirmation,
     identity: Option<ConnectionIdentity>,
+    preview: Option<WritePreview>,
     on_confirm: ConfirmCallback,
 ) {
     let WriteConfirmation { title, message, confirm_label, destructive } = confirmation;
+    let preview = preview.map(|preview| WritePreviewView::new(preview, window, cx));
     let on_confirm = Rc::new(RefCell::new(Some(on_confirm)));
     let previous_focus = window.focused(cx);
     let cancel_focus = cx.focus_handle().tab_index(0).tab_stop(true);
@@ -311,11 +330,16 @@ fn open_confirm_dialog_boxed(
             });
         }
 
+        // A statement needs the room to read: code lines run wider than a sentence.
+        let (dialog, width) = match preview {
+            Some(_) => (dialog.w(px(640.0)), px(640.0)),
+            None => (dialog, px(560.0)),
+        };
         dialog.title(title.clone()).min_w(px(420.0)).keyboard(false).child(
             div()
                 .flex()
                 .flex_col()
-                .max_w(px(560.0))
+                .max_w(width)
                 .gap(spacing::md())
                 .p(spacing::md())
                 .on_key_down(key_handler)
@@ -330,6 +354,7 @@ fn open_confirm_dialog_boxed(
                         .text_color(cx.theme().secondary_foreground)
                         .child(message.clone()),
                 )
+                .when_some(preview.clone(), |content, preview| content.child(preview.render(cx)))
                 .child(
                     div()
                         .flex()
