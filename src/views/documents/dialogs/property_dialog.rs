@@ -839,6 +839,11 @@ impl Render for PropertyActionDialog {
             div().into_any_element()
         };
 
+        // An object or array is read as a block of JSON, so it gets room for more than a few lines.
+        let value_height = match self.value_type {
+            ValueType::Document | ValueType::Array => px(320.0),
+            _ => px(160.0),
+        };
         let value_row = if show_value {
             div()
                 .flex()
@@ -848,7 +853,7 @@ impl Render for PropertyActionDialog {
                 .child(
                     Editor::new(&self.value_state)
                         .font_family(crate::theme::fonts::mono())
-                        .h(px(160.0))
+                        .h(value_height)
                         .w_full(),
                 )
                 .into_any_element()
@@ -887,11 +892,22 @@ impl Render for PropertyActionDialog {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap(spacing::md())
                     .pt(spacing::xs())
-                    .child(div().min_h(px(18.0)).text_sm().text_color(status.1).child(status.0))
+                    // The note wraps rather than pushing the buttons out of the dialog.
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .min_h(px(18.0))
+                            .text_sm()
+                            .text_color(status.1)
+                            .child(status.0),
+                    )
                     .child(
                         div()
                             .flex()
+                            .flex_shrink_0()
                             .items_center()
                             .gap(spacing::sm())
                             .child(cancel_button("cancel-property"))

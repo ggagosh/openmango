@@ -220,6 +220,25 @@ impl CollectionView {
                     // Aggregation shortcuts are owned by the context-aware keymap.
                     return;
                 }
+                let in_table = this.view_model.current_session().is_some_and(|session| {
+                    this.state.read(cx).session_view_mode(&session)
+                        == crate::state::DocumentViewMode::Table
+                });
+                if key == "tab"
+                    && !cmd_or_ctrl
+                    && in_table
+                    && this.view_model.inline_editor_focused(window, cx)
+                {
+                    // Spreadsheet Tab: keep the change and edit the next cell of the row. In a
+                    // date's time boxes, Tab first walks hours, minutes, seconds.
+                    if this.view_model.tab_time_box(modifiers.shift, window, cx)
+                        || this.tab_table_cell(modifiers.shift, window, cx)
+                    {
+                        cx.notify();
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
                 if is_escape {
                     if this.search_visible {
                         this.close_search(window, cx);
@@ -230,7 +249,7 @@ impl CollectionView {
                     {
                         let state = this.state.clone();
                         this.view_model.cancel_inline_edit(&state, cx);
-                        window.focus(&this.documents_focus, cx);
+                        this.focus_documents(window, cx);
                         handled = true;
                     }
                     if !handled
@@ -249,7 +268,7 @@ impl CollectionView {
                     if !cmd_or_ctrl
                         && this.view_model.inline_state().is_some()
                         && !this.documents_focus.is_focused(window)
-                        && !this.view_model.inline_input_focused(window, cx)
+                        && !this.view_model.inline_editor_focused(window, cx)
                     {
                         // Done and Cancel keep their native Enter action.
                         return;
@@ -258,7 +277,7 @@ impl CollectionView {
                         this.view_model.commit_inline_edit(&this.state, cx);
                         let committed = this.view_model.inline_state().is_none();
                         if committed {
-                            window.focus(&this.documents_focus, cx);
+                            this.focus_documents(window, cx);
                             if cmd_or_ctrl {
                                 save_documents(this, window, cx);
                             }
@@ -526,12 +545,23 @@ impl CollectionView {
         }
     }
 
+    /// Focuses the pane that shows the documents: aggregation, the table, or the tree.
     pub(crate) fn focus_documents(&self, window: &mut Window, cx: &mut App) {
-        let aggregation = self.view_model.current_session().is_some_and(|key| {
-            self.state.read(cx).session_subview(&key) == Some(CollectionSubview::Aggregation)
-        });
-        let focus = if aggregation { &self.aggregation_focus } else { &self.documents_focus };
-        window.focus(focus, cx);
+        let (aggregation, table) =
+            self.view_model.current_session().map_or((false, false), |key| {
+                let state = self.state.read(cx);
+                (
+                    state.session_subview(&key) == Some(CollectionSubview::Aggregation),
+                    state.session_view_mode(&key) == crate::state::DocumentViewMode::Table,
+                )
+            });
+        if aggregation {
+            window.focus(&self.aggregation_focus, cx);
+        } else if let Some(table) = self.view_model.table_state().filter(|_| table) {
+            window.focus(&table.read(cx).focus_handle(cx), cx);
+        } else {
+            window.focus(&self.documents_focus, cx);
+        }
     }
 
     /// Ensure subview-specific data is loaded (indexes/stats) based on current subview.

@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use gpui_kit::component::calendar::{Calendar, CalendarState};
+use gpui_kit::component::h_flex;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder;
@@ -15,6 +18,8 @@ use crate::views::documents::reference::{
     IncomingLink, ReferenceLink, incoming_arrow, on_incoming_mouse_down, on_reference_mouse_down,
     peek_arrow,
 };
+use crate::views::documents::tree::tree_row::inline_value_input;
+use crate::views::documents::view_model::time_zone_label;
 
 use super::cell_renderer;
 
@@ -182,6 +187,82 @@ impl DocumentTableDelegate {
         };
         self.drafts.get(&item.key).is_some_and(|draft| draft != &item.doc)
     }
+
+    /// Whether this field differs from the saved document: an unsaved change in this cell.
+    fn is_cell_dirty(&self, row_ix: usize, col_ix: usize) -> bool {
+        let (Some(item), Some(column)) =
+            (self.documents.get(row_ix), self.table_cols.columns.get(col_ix))
+        else {
+            return false;
+        };
+        self.drafts
+            .get(&item.key)
+            .is_some_and(|draft| draft.get(&column.key) != item.doc.get(&column.key))
+    }
+}
+
+/// Marks a changed cell above the row's lighter tint, with an edge so it reads at a glance. It
+/// reaches into the kit's cell padding (4px by 8px at the table's default size), so the whole
+/// cell is marked rather than a box around its text.
+fn changed_cell_marker(cx: &App) -> Div {
+    let edge = cx.theme().warning;
+    let mut fill = edge;
+    fill.a = 0.18;
+    div()
+        .absolute()
+        .top(px(-4.))
+        .bottom(px(-4.))
+        .left(px(-8.))
+        .right(px(-8.))
+        .bg(fill)
+        .border_l_2()
+        .border_color(edge)
+}
+
+/// The calendar and time boxes under a date cell's editor. Drawn above the table so the cell
+/// does not clip it, and it occludes the rows beneath, so picking a day does not click them.
+fn cell_calendar(
+    calendar: &Entity<CalendarState>,
+    time: &[Entity<InputState>; 3],
+    zone: String,
+    cx: &App,
+) -> impl IntoElement {
+    let colon = || div().text_sm().text_color(cx.theme().muted_foreground).child(":");
+    // The filter bar's time row: HH : MM : SS, then the zone they are in.
+    let time_row = h_flex()
+        .mt_2()
+        .pt_2()
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .child(Input::new(&time[0]).small().w(px(42.)))
+        .child(colon())
+        .child(Input::new(&time[1]).small().w(px(42.)))
+        .child(colon())
+        .child(Input::new(&time[2]).small().w(px(42.)))
+        .child(div().ml_1().text_xs().text_color(cx.theme().muted_foreground).child(zone));
+    div().absolute().left(px(-8.)).top(relative(1.)).child(
+        deferred(
+            anchored().snap_to_window_with_margin(px(8.)).child(
+                div()
+                    .occlude()
+                    .mt_1()
+                    .p_3()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .shadow_lg()
+                    .rounded(crate::theme::borders::radius_md())
+                    .bg(cx.theme().popover)
+                    .text_color(cx.theme().popover_foreground)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(Calendar::new(calendar).number_of_months(1))
+                    .child(time_row),
+            ),
+        )
+        .with_priority(2),
+    )
 }
 
 impl TableDelegate for DocumentTableDelegate {
@@ -313,6 +394,12 @@ impl TableDelegate for DocumentTableDelegate {
             cx.listener(move |ts, event: &MouseDownEvent, _window, cx| {
                 cx.stop_propagation();
 
+                // Clicking elsewhere keeps a cell edit, as in the tree; an invalid one stays open.
+                let view = ts.delegate().view.clone();
+                if !view.update(cx, |view, cx| view.finish_document_edit(cx)) {
+                    return;
+                }
+
                 let is_shift = event.modifiers.shift;
                 let is_cmd = event.modifiers.secondary(cx) || event.modifiers.control;
 
@@ -373,14 +460,45 @@ impl TableDelegate for DocumentTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        // The cell being edited holds the editor in place of its value.
+        let editor =
+            self.document_key(row_ix).zip(self.column_key(col_ix)).and_then(|(doc_key, field)| {
+                let view_model = &self.view.read(cx).view_model;
+                let input = view_model.inline_editor_for(&doc_key, &field)?.clone();
+                let has_error = view_model.inline_edit_error(cx).is_some();
+                let picker = view_model
+                    .cell_calendar()
+                    .map(|picker| (picker.calendar.clone(), picker.time.clone()));
+                Some((input, has_error, picker))
+            });
+        if let Some((input, has_error, picker)) = editor {
+            return div()
+                .relative()
+                .size_full()
+                .flex()
+                .items_center()
+                // Clicks inside the editor stay there instead of selecting the row.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                // The cell's own text size, so the value does not jump when editing starts.
+                .child(inline_value_input(&input, has_error, cx).text_xs())
+                .when_some(picker, |this, (calendar, time)| {
+                    let zone = time_zone_label(&input.read(cx).value());
+                    this.child(cell_calendar(&calendar, &time, zone, cx))
+                })
+                .into_any_element();
+        }
+
         let content = self
             .cell_value(row_ix, col_ix)
             .map(|value| cell_renderer::render_cell(value, row_ix, col_ix, cx));
         let link = self.reference_link(row_ix, col_ix);
         let incoming = self.incoming_link(row_ix, col_ix);
+        let changed = self.is_cell_dirty(row_ix, col_ix);
 
         div()
+            .relative()
             .size_full()
+            .when(changed, |this| this.child(changed_cell_marker(cx)))
             .group(TABLE_CELL_GROUP)
             .flex()
             .items_center()
@@ -389,6 +507,27 @@ impl TableDelegate for DocumentTableDelegate {
                 MouseButton::Right,
                 cx.listener(move |table, _, _, _| {
                     table.delegate_mut().context_column = Some(col_ix);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |table, event: &MouseDownEvent, window, cx| {
+                    if event.click_count != 2 {
+                        return;
+                    }
+                    let delegate = table.delegate();
+                    let (Some(doc_key), Some(field)) =
+                        (delegate.document_key(row_ix), delegate.column_key(col_ix))
+                    else {
+                        return;
+                    };
+                    // The first click selected the row; this one must not reach the row and end
+                    // the edit it starts.
+                    cx.stop_propagation();
+                    delegate.view.clone().update(cx, |view, cx| {
+                        view.edit_table_cell(doc_key, field, window, cx);
+                    });
+                    cx.notify();
                 }),
             )
             .when_some(link.clone(), |this, link| {

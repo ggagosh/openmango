@@ -454,7 +454,7 @@ fn format_relaxed_object(map: &serde_json::Map<String, Value>, indent: usize) ->
     out
 }
 
-fn is_relaxed_key(key: &str) -> bool {
+pub(crate) fn is_relaxed_key(key: &str) -> bool {
     let mut chars = key.chars();
     let Some(first) = chars.next() else {
         return false;
