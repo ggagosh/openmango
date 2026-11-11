@@ -624,6 +624,11 @@ pub(crate) fn paste_documents_from_clipboard(
 
     let state_for_write = state.clone();
     let target = session_key.namespace();
+    let preview = crate::components::WritePreview::new(&session_key.database).statement(
+        &session_key.collection,
+        "insertMany",
+        [Bson::Array(docs.iter().cloned().map(Bson::Document).collect())],
+    );
     request_connection_write(
         state,
         crate::components::WriteRequest::new(
@@ -640,7 +645,8 @@ pub(crate) fn paste_documents_from_clipboard(
                 confirm_label: "Insert documents".into(),
                 destructive: false,
             }),
-        ),
+        )
+        .with_preview(preview),
         window,
         cx,
         move |_window, cx| {

@@ -153,6 +153,11 @@ impl CollectionView {
                 let message = format!("Delete document {}? This cannot be undone.", doc_key);
                 let state = this.state.clone();
                 let state_for_write = state.clone();
+                let preview = crate::components::WritePreview::delete_one(
+                    state.read(cx),
+                    &session_key,
+                    &doc_key,
+                );
                 request_connection_write(
                     state,
                     crate::components::WriteRequest::new(
@@ -165,7 +170,8 @@ impl CollectionView {
                             confirm_label: "Delete".into(),
                             destructive: true,
                         }),
-                    ),
+                    )
+                    .with_preview(preview),
                     window,
                     cx,
                     move |_window, cx| {
@@ -205,6 +211,9 @@ impl CollectionView {
                             confirm_label: "Delete".into(),
                             destructive: true,
                         }),
+                    )
+                    .with_preview(
+                        crate::components::WritePreview::delete_many(&session_key, &filter),
                     ),
                     window,
                     cx,

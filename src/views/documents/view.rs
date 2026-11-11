@@ -35,11 +35,11 @@ fn collapse_to_single_line(s: &str) -> String {
     s.lines().map(|l| l.trim()).collect::<Vec<_>>().join(" ")
 }
 
-fn parse_time_part(val: &str, max: u32) -> u32 {
+pub(super) fn parse_time_part(val: &str, max: u32) -> u32 {
     val.trim().parse::<u32>().unwrap_or(0).min(max)
 }
 
-fn subscribe_time_input(
+pub(super) fn subscribe_time_input(
     cx: &mut Context<'_, CollectionView>,
     window: &mut Window,
     state: &Entity<InputState>,

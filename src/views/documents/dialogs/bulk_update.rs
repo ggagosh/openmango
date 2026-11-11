@@ -265,6 +265,24 @@ impl BulkUpdateDialog {
 
         let mode = self.mode;
         let scope = self.scope;
+        // Update runs one updateMany. Replace looks up the matching _ids and replaces each, so
+        // only a single selected document has one statement that says what it does.
+        let preview = match (mode, scope, &selected_id) {
+            (BulkUpdateMode::Update, _, _) => Some(("updateMany", update_doc.clone())),
+            (BulkUpdateMode::Replace, BulkUpdateScope::SelectedDocument, Some(id)) => {
+                let mut replacement = update_doc.clone();
+                replacement.insert("_id", id.clone());
+                Some(("replaceOne", replacement))
+            }
+            (BulkUpdateMode::Replace, _, _) => None,
+        }
+        .map(|(method, update)| {
+            crate::components::WritePreview::new(&self.session_key.database).statement(
+                &self.session_key.collection,
+                method,
+                [filter.clone().into(), update.into()],
+            )
+        });
         let title = format!("{} documents", mode.label());
         let confirm_label = mode.label();
         let session_key = self.session_key.clone();
@@ -290,7 +308,8 @@ impl BulkUpdateDialog {
                         confirm_label: confirm_label.to_string(),
                         destructive: true,
                     }),
-                ),
+                )
+                .with_preview(preview),
                 window,
                 cx,
                 move |_window, cx| {
@@ -366,7 +385,8 @@ impl BulkUpdateDialog {
                             confirm_label: confirm_label.to_string(),
                             destructive: true,
                         }),
-                        ),
+                        )
+                        .with_preview(preview),
                         window,
                         cx,
                         move |_window, cx| {

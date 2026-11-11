@@ -1,8 +1,10 @@
 use gpui_kit::{App, AppContext as _, Entity};
 use mongodb::bson::{Document, doc};
 
-use crate::bson::{DocumentKey, parse_bson_from_relaxed_json};
-use crate::connection::ops::documents::replace_document_if_current_async;
+use crate::bson::{DocumentKey, field_update, parse_bson_from_relaxed_json};
+use crate::connection::ops::documents::{
+    replace_document_if_current_async, update_document_if_unchanged_async,
+};
 use crate::state::{AppEvent, AppState, EditorSessionId, SessionKey, StatusMessage};
 
 use crate::state::AppCommands;
@@ -121,19 +123,39 @@ impl AppCommands {
         });
 
         let updated_for_task = updated.clone();
+        // Field edits write only the fields they changed. The JSON editor's save replaces the
+        // document, since its text may move, rename or restructure anything in it.
+        let field_update = match editor {
+            None => field_update(&original_id, &baseline_document, &updated),
+            Some(_) => None,
+        };
         let task = runtime.spawn({
             let database = database.clone();
             let collection = collection.clone();
             async move {
-                replace_document_if_current_async(
-                    &client,
-                    &database,
-                    &collection,
-                    original_id,
-                    baseline_document,
-                    updated_for_task,
-                )
-                .await
+                match field_update {
+                    Some(update) => {
+                        update_document_if_unchanged_async(
+                            &client,
+                            &database,
+                            &collection,
+                            original_id,
+                            update,
+                        )
+                        .await
+                    }
+                    None => {
+                        replace_document_if_current_async(
+                            &client,
+                            &database,
+                            &collection,
+                            original_id,
+                            baseline_document,
+                            updated_for_task,
+                        )
+                        .await
+                    }
+                }
             }
         });
 

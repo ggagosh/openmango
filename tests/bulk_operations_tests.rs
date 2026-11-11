@@ -245,6 +245,85 @@ async fn test_replace_document_if_current_rejects_conflicts() {
     assert_eq!(current.get_str("value").ok(), Some("server edit"));
 }
 
+/// A field edit keeps what someone else changed in other fields, refuses to overwrite a field
+/// they changed, and says which one.
+#[tokio::test]
+async fn test_field_update_keeps_other_edits_and_rejects_conflicts() {
+    use openmango::bson::field_update;
+    use openmango::connection::ops::documents::update_document_if_unchanged_async;
+
+    let mongo = MongoTestContainer::start().await;
+    let collection = mongo.collection::<Document>("test_db", "field_update");
+    let loaded = doc! { "_id": 1, "status": "open", "items": [{ "q": 1 }], "note": "x" };
+    collection.insert_one(loaded.clone()).await.expect("Failed to seed collection");
+    let database = mongo.db_name("test_db");
+    let id = mongodb::bson::Bson::Int32(1);
+
+    // Someone else edits another field after the document was loaded.
+    collection
+        .update_one(doc! { "_id": 1 }, doc! { "$set": { "note": "server edit" } })
+        .await
+        .expect("Failed to simulate concurrent server edit");
+    let edited = doc! { "_id": 1, "status": "closed", "items": [{ "q": 2 }], "note": "x" };
+    let update = field_update(&id, &loaded, &edited).expect("edit should be a field update");
+    update_document_if_unchanged_async(
+        &mongo.client,
+        &database,
+        "field_update",
+        id.clone(),
+        update,
+    )
+    .await
+    .expect("an edit to other fields should save");
+    let current = collection.find_one(doc! { "_id": 1 }).await.unwrap().unwrap();
+    assert_eq!(
+        current,
+        doc! { "_id": 1, "status": "closed", "items": [{ "q": 2 }], "note": "server edit" }
+    );
+
+    // Saving from the stale copy again now meets a changed status.
+    let stale = doc! { "_id": 1, "status": "reopened", "items": [{ "q": 2 }], "note": "x" };
+    let update = field_update(&id, &loaded, &stale).expect("edit should be a field update");
+    let error = update_document_if_unchanged_async(
+        &mongo.client,
+        &database,
+        "field_update",
+        id.clone(),
+        update.clone(),
+    )
+    .await
+    .expect_err("a field changed since loading must not be overwritten");
+    assert!(error.to_string().contains("status and items.0.q changed on the server"), "{error}");
+    let after = collection.find_one(doc! { "_id": 1 }).await.unwrap().unwrap();
+    assert_eq!(after, current);
+
+    // Only the type changed on the server: 1 became 1.0. That is a conflict too.
+    collection
+        .update_one(doc! { "_id": 1 }, doc! { "$set": { "items.0.q": 2.0 } })
+        .await
+        .expect("Failed to simulate a change of type");
+    let edited =
+        doc! { "_id": 1, "status": "closed", "items": [{ "q": 3 }], "note": "server edit" };
+    let typed = field_update(&id, &current, &edited).expect("edit should be a field update");
+    let error = update_document_if_unchanged_async(
+        &mongo.client,
+        &database,
+        "field_update",
+        id.clone(),
+        typed,
+    )
+    .await
+    .expect_err("a field whose type changed must not be overwritten");
+    assert!(error.to_string().contains("items.0.q changed on the server"), "{error}");
+
+    collection.delete_one(doc! { "_id": 1 }).await.unwrap();
+    let error =
+        update_document_if_unchanged_async(&mongo.client, &database, "field_update", id, update)
+            .await
+            .expect_err("a deleted document must not be saved");
+    assert!(error.to_string().contains("deleted"), "{error}");
+}
+
 #[tokio::test]
 async fn test_csv_export_discovers_columns_after_first_thousand_documents() {
     let mongo = MongoTestContainer::start().await;

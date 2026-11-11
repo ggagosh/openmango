@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
+use chrono::NaiveDate;
+use gpui_kit::component::calendar::{CalendarEvent, CalendarState, Date};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::table::TableState;
 use gpui_kit::component::tree::{TreeItem, TreeState};
@@ -17,6 +19,7 @@ use crate::views::documents::dialogs::property_dialog::PropertyActionDialog;
 use crate::views::documents::node_meta::NodeMeta;
 use crate::views::documents::table::aggregation_table_delegate::AggregationTableDelegate;
 use crate::views::documents::table::document_table_delegate::DocumentTableDelegate;
+use crate::views::documents::table::table_columns::TableColumns;
 use crate::views::documents::tree::document_tree::build_documents_tree;
 
 use super::CollectionView;
@@ -55,6 +58,87 @@ pub struct DocumentViewModel {
     col_visibility_search: Option<Entity<InputState>>,
     agg_table_state: Option<Entity<TableState<AggregationTableDelegate>>>,
     agg_table_generation: Option<u64>,
+    /// The calendar under a date cell while it is edited in the table.
+    cell_calendar: Option<CellCalendar>,
+}
+
+/// The picker under a date cell's editor: a calendar for the day and boxes for the time. Both
+/// rewrite their part of the cell's text, which stays the one value being edited.
+pub struct CellCalendar {
+    pub calendar: Entity<CalendarState>,
+    /// Hours, minutes, seconds.
+    pub time: [Entity<InputState>; 3],
+    _subscriptions: Vec<Subscription>,
+}
+
+/// The `YYYY-MM-DD` a date's edit text starts with, as the date editor writes it.
+fn leading_date(text: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(text.get(..10)?, "%Y-%m-%d").ok()
+}
+
+/// `text` with its leading day replaced by `day`, keeping the time and offset after it. Text
+/// that does not start with a day becomes just the day, which the date parser also reads.
+fn with_date(text: &str, day: NaiveDate) -> String {
+    let day = day.format("%Y-%m-%d").to_string();
+    match leading_date(text) {
+        Some(_) => format!("{day}{}", &text[10..]),
+        None => day,
+    }
+}
+
+/// The hours, minutes and seconds of a date's edit text (`YYYY-MM-DDTHH:MM:SS…`).
+fn time_parts(text: &str) -> Option<[&str; 3]> {
+    leading_date(text)?;
+    if !matches!(text.as_bytes().get(10), Some(b'T' | b' ')) {
+        return None;
+    }
+    let parts = [text.get(11..13)?, text.get(14..16)?, text.get(17..19)?];
+    let colons = text.get(13..14) == Some(":") && text.get(16..17) == Some(":");
+    (colons && parts.iter().all(|part| part.bytes().all(|b| b.is_ascii_digit()))).then_some(parts)
+}
+
+/// `text` with its time of day replaced by `time` (`HH:MM:SS`), keeping the day and the offset.
+/// Fractions of a second go, since the boxes set whole seconds. Text that does not start with
+/// a day stays as it is.
+fn with_time(text: &str, time: &str) -> String {
+    match utc_offset(text) {
+        Some(offset) => format!("{}T{time}{offset}", &text[..10]),
+        None => text.to_string(),
+    }
+}
+
+/// What follows the time in a date's edit text: `Z`, `+04:00`, or nothing.
+fn utc_offset(text: &str) -> Option<&str> {
+    leading_date(text)?;
+    let rest = text[10..].strip_prefix(['T', ' ']).unwrap_or(&text[10..]);
+    let offset = rest.trim_start_matches(|c: char| c.is_ascii_digit() || c == ':');
+    Some(
+        offset
+            .strip_prefix('.')
+            .map_or(offset, |fraction| fraction.trim_start_matches(|c: char| c.is_ascii_digit())),
+    )
+}
+
+/// The zone the time boxes are in, beside them: the text's offset, or UTC, which is how the
+/// date parser reads a time without one.
+pub fn time_zone_label(text: &str) -> String {
+    match utc_offset(text) {
+        Some("" | "Z") | None => "UTC".into(),
+        Some(offset) => offset.into(),
+    }
+}
+
+/// The time the three boxes spell, once each holds a number.
+fn typed_time(boxes: &[Entity<InputState>; 3], cx: &App) -> Option<String> {
+    let mut parts = [0; 3];
+    for ((part, input), max) in parts.iter_mut().zip(boxes).zip([23, 59, 59]) {
+        let value = input.read(cx).value();
+        if value.is_empty() {
+            return None;
+        }
+        *part = super::view::parse_time_part(&value, max);
+    }
+    Some(format!("{:02}:{:02}:{:02}", parts[0], parts[1], parts[2]))
 }
 
 /// Order-independent signature of a selection set: two independent accumulators
@@ -97,6 +181,7 @@ impl DocumentViewModel {
             col_visibility_search: None,
             agg_table_state: None,
             agg_table_generation: None,
+            cell_calendar: None,
         }
     }
 
@@ -339,6 +424,147 @@ impl DocumentViewModel {
         self.editing_draft_before = None;
         self.inline_editor_state = None;
         self.inline_value_subscription = None;
+        self.cell_calendar = None;
+        // The table draws drafts from its last rebuild; an edit that ends may have changed one.
+        self.invalidate_table();
+    }
+
+    /// The document and top-level field being edited: a table cell, or a top-level tree value.
+    pub fn editing_field(&self) -> Option<(DocumentKey, String)> {
+        let [PathSegment::Key(field)] = self.editing_path.as_slice() else { return None };
+        Some((self.editing_doc_key.clone()?, field.clone()))
+    }
+
+    /// The inline editor, when it is editing this top-level field of this document: a table cell.
+    pub fn inline_editor_for(
+        &self,
+        doc_key: &DocumentKey,
+        field: &str,
+    ) -> Option<&Entity<InputState>> {
+        let editing = self.editing_field().is_some_and(|(editing_doc, editing_field)| {
+            &editing_doc == doc_key && editing_field == field
+        });
+        self.inline_editor_state.as_ref().filter(|_| editing)
+    }
+
+    pub fn cell_calendar(&self) -> Option<&CellCalendar> {
+        self.cell_calendar.as_ref()
+    }
+
+    /// Whether focus is anywhere in the cell editor: its text, or a time box under it.
+    pub fn inline_editor_focused(&self, window: &Window, cx: &App) -> bool {
+        self.inline_input_focused(window, cx)
+            || self.cell_calendar.as_ref().is_some_and(|picker| {
+                picker.time.iter().any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+            })
+    }
+
+    /// Tab and Shift+Tab in the time boxes: hours, minutes, seconds, and Shift+Tab from the
+    /// hours back to the text. False when Tab should leave the cell instead.
+    pub fn tab_time_box(&self, backwards: bool, window: &mut Window, cx: &mut App) -> bool {
+        let (Some(text), Some(picker)) = (&self.inline_editor_state, &self.cell_calendar) else {
+            return false;
+        };
+        let Some(at) =
+            picker.time.iter().position(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        else {
+            return false;
+        };
+        let target = match (backwards, at) {
+            (true, 0) => text,
+            (true, at) => &picker.time[at - 1],
+            (false, 2) => return false,
+            (false, at) => &picker.time[at + 1],
+        };
+        let focus = target.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        true
+    }
+
+    /// Opens the day and time picker under the date being edited. Picking a day rewrites the
+    /// date part of the text and the time boxes rewrite its time; typing in the text moves the
+    /// picker along with it.
+    pub fn open_cell_calendar(&mut self, window: &mut Window, cx: &mut Context<CollectionView>) {
+        let Some(input) = self.inline_editor_state.clone() else { return };
+        let text = input.read(cx).value().to_string();
+        let calendar = cx.new(|cx| CalendarState::new(window, cx));
+        if let Some(day) = leading_date(&text) {
+            calendar.update(cx, |calendar, cx| calendar.set_date(day, window, cx));
+        }
+        let time = ["HH", "MM", "SS"]
+            .map(|placeholder| cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)));
+        if let Some(parts) = time_parts(&text) {
+            for (time_input, part) in time.iter().zip(parts) {
+                time_input.update(cx, |time_input, cx| time_input.set_value(part, window, cx));
+            }
+        }
+
+        // `set_value` emits no change, so none of these rewrites sets off another.
+        let mut subscriptions = vec![cx.subscribe_in(&calendar, window, {
+            let input = input.clone();
+            move |view, _, event: &CalendarEvent, window, cx| {
+                let CalendarEvent::Selected(Date::Single(Some(day))) = event else { return };
+                let text = with_date(&input.read(cx).value(), *day);
+                let state = view.state.clone();
+                view.view_model.set_cell_text(&state, &input, text, window, cx);
+                // Back to the text, so Enter keeps the date.
+                let focus = input.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            }
+        })];
+        for (time_input, max) in time.iter().zip([23, 59, 59]) {
+            // Digits only, padded and clamped on blur: the filter bar's time boxes.
+            subscriptions.push(super::view::subscribe_time_input(cx, window, time_input, max));
+            subscriptions.push(cx.subscribe_in(time_input, window, {
+                let input = input.clone();
+                let time = time.clone();
+                move |view, _, event: &InputEvent, window, cx| {
+                    if !matches!(event, InputEvent::Change) {
+                        return;
+                    }
+                    let Some(time_of_day) = typed_time(&time, cx) else { return };
+                    let text = with_time(&input.read(cx).value(), &time_of_day);
+                    let state = view.state.clone();
+                    view.view_model.set_cell_text(&state, &input, text, window, cx);
+                }
+            }));
+        }
+        subscriptions.push(cx.subscribe_in(&input, window, {
+            let time = time.clone();
+            move |_, input, event: &InputEvent, window, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                let Some(parts) = time_parts(&input.read(cx).value()).map(|p| p.map(String::from))
+                else {
+                    return;
+                };
+                for (time_input, part) in time.iter().zip(parts) {
+                    if time_input.read(cx).value() != part {
+                        time_input
+                            .update(cx, |time_input, cx| time_input.set_value(part, window, cx));
+                    }
+                }
+            }
+        }));
+        self.cell_calendar = Some(CellCalendar { calendar, time, _subscriptions: subscriptions });
+    }
+
+    /// Puts the picker's result in the cell's text and stages it, as typing there would.
+    fn set_cell_text(
+        &mut self,
+        state: &Entity<AppState>,
+        input: &Entity<InputState>,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<CollectionView>,
+    ) {
+        if input.read(cx).value() == text {
+            return;
+        }
+        input.update(cx, |input, cx| input.set_value(text, window, cx));
+        self.sync_inline_edit_draft(state, cx);
+        cx.notify();
     }
 
     pub fn begin_inline_edit(
@@ -718,6 +944,11 @@ impl DocumentViewModel {
 
             let table_state = self.ensure_table_state(state, view, window, cx);
             table_state.update(cx, |ts, cx| {
+                // One table serves every collection tab, and its columns accumulate as documents
+                // are seen. Start over when the collection changes, or the last one's columns stay.
+                if ts.delegate().session_key.as_ref() != Some(&session_key) {
+                    ts.delegate_mut().table_cols = TableColumns::new();
+                }
                 ts.delegate_mut().set_saved_widths(saved_widths);
                 ts.delegate_mut().set_column_order(saved_order);
                 ts.delegate_mut().set_pinned_columns(pinned);
@@ -940,5 +1171,118 @@ mod inline_edit_tests {
                 assert!(!state.read(cx).session_has_invalid_edit(&key));
             });
         });
+    }
+
+    #[gpui_kit::test]
+    fn table_columns_do_not_carry_over_to_another_collection(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let connection = uuid::Uuid::new_v4();
+            let first = SessionKey::new(connection, "db", "first");
+            let second = SessionKey::new(connection, "db", "second");
+            let state = cx.new(|_| AppState::new());
+            state.update(cx, |state, _| {
+                for (key, doc) in [
+                    (&first, doc! { "_id": 1, "active": true, "color": "red" }),
+                    (&second, doc! { "_id": 2, "name": "b" }),
+                ] {
+                    let doc_key = DocumentKey::from_document(&doc, 0);
+                    let session = state.ensure_session(key.clone());
+                    session.data.index_by_key.insert(doc_key.clone(), 0);
+                    session.data.items.push(SessionDocument { key: doc_key, doc });
+                }
+            });
+            let view = cx.new(|cx| CollectionView::new(state.clone(), cx));
+            view.update(cx, |view, cx| {
+                let entity = cx.entity();
+                let model = &mut view.view_model;
+                for key in [&first, &second] {
+                    model.current_session = Some(key.clone());
+                    model.invalidate_table();
+                    model.rebuild_table(&state, &entity, window, cx);
+                }
+                let table = model.table_state().unwrap().read(cx);
+                assert_eq!(table.delegate().all_column_keys(), ["_id", "name"]);
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn table_cells_flip_booleans_select_text_and_tab_over_cells_that_do_not_edit_in_place(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let key = SessionKey::new(uuid::Uuid::new_v4(), "db", "accounts");
+            let doc = doc! { "_id": 1, "active": true, "name": "Acme", "seats": 3, "tags": ["a"] };
+            let doc_key = DocumentKey::from_document(&doc, 0);
+            let state = cx.new(|_| AppState::new());
+            state.update(cx, |state, _| {
+                let session = state.ensure_session(key.clone());
+                session.data.index_by_key.insert(doc_key.clone(), 0);
+                session.data.items.push(SessionDocument { key: doc_key.clone(), doc });
+            });
+            let view = cx.new(|cx| CollectionView::new(state.clone(), cx));
+            view.update(cx, |view, cx| {
+                let entity = cx.entity();
+                view.view_model.current_session = Some(key.clone());
+                view.view_model.rebuild_table(&state, &entity, window, cx);
+                let active = |cx: &gpui_kit::App| {
+                    let draft = state.read(cx).session_draft(&key, &doc_key)?;
+                    draft.get_bool("active").ok()
+                };
+
+                // A boolean flips; flipping it back leaves nothing to save.
+                view.edit_table_cell(doc_key.clone(), "active".into(), window, cx);
+                assert_eq!(active(cx), Some(false));
+                view.edit_table_cell(doc_key.clone(), "active".into(), window, cx);
+                assert_eq!(active(cx), None);
+
+                // A string opens in its cell with the value selected, so typing replaces it.
+                view.edit_table_cell(doc_key.clone(), "name".into(), window, cx);
+                let input = view.view_model.inline_editor_for(&doc_key, "name").unwrap();
+                assert_eq!(input.read(cx).selected_value().as_ref(), "Acme");
+
+                // Tab moves on to the number, then finds nothing after the array and stops.
+                assert!(view.tab_table_cell(false, window, cx));
+                assert!(view.view_model.inline_editor_for(&doc_key, "seats").is_some());
+                assert!(view.tab_table_cell(false, window, cx));
+                assert!(view.view_model.inline_state().is_none());
+
+                // Shift+Tab goes back over the boolean and stops before _id.
+                view.edit_table_cell(doc_key.clone(), "seats".into(), window, cx);
+                assert!(view.tab_table_cell(true, window, cx));
+                assert!(view.view_model.inline_editor_for(&doc_key, "name").is_some());
+                assert!(view.tab_table_cell(true, window, cx));
+                assert!(view.view_model.inline_state().is_none());
+            });
+        });
+    }
+
+    #[test]
+    fn picking_a_day_keeps_the_typed_time_and_offset() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 12, 24).unwrap();
+        assert_eq!(super::with_date("2026-11-03T09:30:00+04:00", day), "2026-12-24T09:30:00+04:00");
+        assert_eq!(super::with_date("2026-11-03", day), "2026-12-24");
+        assert_eq!(super::with_date("not a date", day), "2026-12-24");
+        assert_eq!(super::with_date("", day), "2026-12-24");
+    }
+
+    #[test]
+    fn typing_a_time_keeps_the_day_and_offset() {
+        use super::{time_parts, with_time};
+        assert_eq!(time_parts("2026-11-03T09:30:05.120Z"), Some(["09", "30", "05"]));
+        assert_eq!(time_parts("2026-11-03 09:30:05+04:00"), Some(["09", "30", "05"]));
+        assert_eq!(time_parts("2026-11-03"), None);
+        assert_eq!(time_parts("2026-11-03T9:30"), None);
+        assert_eq!(with_time("2026-11-03T09:30:00+04:00", "18:05:59"), "2026-11-03T18:05:59+04:00");
+        assert_eq!(with_time("2026-11-03T09:30:00.120Z", "18:05:59"), "2026-11-03T18:05:59Z");
+        assert_eq!(with_time("2026-11-03 09:30", "18:05:59"), "2026-11-03T18:05:59");
+        assert_eq!(with_time("2026-11-03", "18:05:59"), "2026-11-03T18:05:59");
+        assert_eq!(with_time("not a date", "18:05:59"), "not a date");
+        assert_eq!(super::time_zone_label("2026-11-03T09:30:00+04:00"), "+04:00");
+        assert_eq!(super::time_zone_label("2026-11-03T09:30:00.5Z"), "UTC");
     }
 }

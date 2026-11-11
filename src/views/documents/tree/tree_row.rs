@@ -630,7 +630,11 @@ fn with_value_chrome<E: Styled + ParentElement>(
 /// The inline value editor. Its padding and border sit outside the text box through negative
 /// margins, and it shares the value text's line box, so double-clicking to edit moves neither the
 /// value text nor the row — the in-place editing pattern of spreadsheets and file renames.
-fn inline_value_input(inline_state: &Entity<InputState>, has_error: bool, cx: &App) -> Input {
+pub(crate) fn inline_value_input(
+    inline_state: &Entity<InputState>,
+    has_error: bool,
+    cx: &App,
+) -> Input {
     let border = px(1.0);
     Input::new(inline_state)
         .font_family(crate::theme::fonts::mono())

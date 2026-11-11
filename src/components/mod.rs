@@ -45,6 +45,7 @@ mod status_bar;
 pub mod tri_checkbox;
 mod unsaved_guard;
 pub mod updater;
+pub mod write_preview;
 pub use busy_button::busy_label;
 pub(crate) use confirm::with_scoped_production_authorizations;
 pub use confirm::{WriteConfirmation, WriteRequest, open_confirm_dialog, request_connection_write};
@@ -67,3 +68,4 @@ pub use unsaved_guard::{
     request_app_quit, request_disconnect_connection, request_preview_collection,
     request_remove_connection, request_unsaved_action,
 };
+pub use write_preview::WritePreview;

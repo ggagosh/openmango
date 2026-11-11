@@ -193,6 +193,11 @@ fn render_delete_menu(
                                 let message =
                                     format!("Delete document {}? This cannot be undone.", doc_key);
                                 let state_for_write = state_for_delete.clone();
+                                let preview = crate::components::WritePreview::delete_one(
+                                    state_for_delete.read(cx),
+                                    &session_key,
+                                    &doc_key,
+                                );
                                 request_connection_write(
                                     state_for_delete.clone(),
                                     crate::components::WriteRequest::new(
@@ -205,7 +210,8 @@ fn render_delete_menu(
                                             confirm_label: "Delete".into(),
                                             destructive: true,
                                         }),
-                                    ),
+                                    )
+                                    .with_preview(preview),
                                     window,
                                     cx,
                                     move |_window, cx| {
@@ -250,6 +256,12 @@ fn render_delete_menu(
                                             confirm_label: "Delete".into(),
                                             destructive: true,
                                         }),
+                                    )
+                                    .with_preview(
+                                        crate::components::WritePreview::delete_many(
+                                            &session_key,
+                                            &filter,
+                                        ),
                                     ),
                                     window,
                                     cx,
