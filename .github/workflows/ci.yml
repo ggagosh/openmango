@@ -35,7 +35,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.2"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -82,7 +82,7 @@ jobs:
         if: env.FULL == 'true'
         with:
           bun-version: "1.4.2"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: env.FULL == 'true'
         with:
           # Not the cache built on Ubuntu 24.04.
@@ -170,7 +170,7 @@ jobs:
         if: env.FULL == 'true'
         with:
           bun-version: "1.4.2"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: env.FULL == 'true'
         with:
           # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
@@ -212,7 +212,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # PRs restore main's cache; saving from PRs evicts it and cancelled runs save partial caches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
