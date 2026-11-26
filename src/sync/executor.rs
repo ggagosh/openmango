@@ -3,7 +3,7 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::actions::ActionStore;
@@ -477,7 +477,7 @@ impl SyncExecutor {
     ) -> Result<(), String> {
         operation.status = OperationStatus::Running;
         operation.progress.phase = phase;
-        operation.updated_at = Utc::now();
+        operation.updated_at = Timestamp::now();
         self.store.save_operation(operation).map_err(safe_error)
     }
 
@@ -516,7 +516,7 @@ impl SyncExecutor {
                     operation.progress.documents_total = documents;
                 }
             }
-            operation.updated_at = Utc::now();
+            operation.updated_at = Timestamp::now();
             let _ = store.save_operation(&operation);
         })
     }
@@ -524,8 +524,8 @@ impl SyncExecutor {
     fn finish_completed(&self, mut operation: OperationRecord) -> Result<OperationRecord, String> {
         operation.status = OperationStatus::Completed;
         operation.progress.phase = OperationPhase::Completed;
-        operation.completed_at = Some(Utc::now());
-        operation.updated_at = Utc::now();
+        operation.completed_at = Some(Timestamp::now());
+        operation.updated_at = Timestamp::now();
         operation.recovery_interlock = false;
         self.store.save_operation(&operation).map_err(safe_error)?;
         Ok(operation)
@@ -533,8 +533,8 @@ impl SyncExecutor {
 
     fn finish_cancelled(&self, mut operation: OperationRecord) -> Result<OperationRecord, String> {
         operation.status = OperationStatus::Cancelled;
-        operation.completed_at = Some(Utc::now());
-        operation.updated_at = Utc::now();
+        operation.completed_at = Some(Timestamp::now());
+        operation.updated_at = Timestamp::now();
         operation.recovery_interlock = false;
         self.store.save_operation(&operation).map_err(safe_error)?;
         Ok(operation)
@@ -552,8 +552,8 @@ impl SyncExecutor {
             OperationStatus::Failed
         };
         operation.public_error_code = Some(code.to_string());
-        operation.completed_at = Some(Utc::now());
-        operation.updated_at = Utc::now();
+        operation.completed_at = Some(Timestamp::now());
+        operation.updated_at = Timestamp::now();
         operation.recovery_interlock = recovery_required;
         self.store.save_operation(&operation).map_err(safe_error)?;
         Ok(operation)

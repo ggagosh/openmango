@@ -18,7 +18,7 @@ use gpui_kit::*;
 use mongodb::bson::Document;
 
 use crate::bson::DocumentKey;
-use crate::components::{Button, WriteConfirmation, busy_label, request_connection_write};
+use crate::components::{Button, WriteConfirmation, request_connection_write};
 use crate::keyboard::{
     DiscardDocumentChanges, RunAggregation, SaveDocument, TransferCopy, TransferExport,
     TransferImport,
@@ -122,7 +122,11 @@ pub fn render_pending_changes(
                 }),
         )
         .child(
-            busy_label(Button::new("save-changes").primary(), Size::XSmall, "Save", saving)
+            Button::new("save-changes")
+                .primary()
+                .with_size(Size::XSmall)
+                .loading(saving)
+                .label("Save")
                 .children(shortcut(&SaveDocument))
                 .tooltip("Save unsaved documents in this tab")
                 .on_click(move |_, window, cx| {
@@ -1331,7 +1335,7 @@ pub fn render_aggregation_actions(
                         false,
                     ),
                 };
-                busy_label(Button::new("agg-save-view"), Size::XSmall, label, busy)
+                Button::new("agg-save-view").with_size(Size::XSmall).loading(busy).label(label)
                     .tooltip(tooltip)
                     .disabled(session_key.is_none() || busy)
                     .on_click({

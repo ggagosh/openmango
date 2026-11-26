@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use gpui_kit::{App, AppContext as _, Entity, WeakEntity};
+use jiff::Timestamp;
 
 use super::AppCommands;
 use super::tasks::Launch;
@@ -24,13 +24,13 @@ impl AppCommands {
             loop {
                 let next = cx.update(|cx| {
                     let state = state.upgrade()?;
-                    Some(Self::check_schedules(&state, Utc::now(), cx))
+                    Some(Self::check_schedules(&state, Timestamp::now(), cx))
                 });
                 let Some(next) = next else {
                     return;
                 };
                 let wait = next
-                    .and_then(|at| (at - Utc::now()).to_std().ok())
+                    .and_then(|at| Duration::try_from(at.duration_since(Timestamp::now())).ok())
                     .unwrap_or(LOOK_AT_LEAST_EVERY)
                     .clamp(Duration::from_millis(250), LOOK_AT_LEAST_EVERY);
                 cx.background_executor().timer(wait).await;
@@ -43,9 +43,9 @@ impl AppCommands {
     /// says when the next run is due.
     pub(crate) fn check_schedules(
         state: &Entity<AppState>,
-        now: DateTime<Utc>,
+        now: Timestamp,
         cx: &mut App,
-    ) -> Option<DateTime<Utc>> {
+    ) -> Option<Timestamp> {
         // Until the lock is free, the background runner is starting runs; look again later.
         if !state.update(cx, |app, cx| {
             cx.notify();
@@ -57,7 +57,7 @@ impl AppCommands {
             let app = state.read(cx);
             (app.tasks.tasks.clone(), app.tasks.background)
         };
-        let mut next: Option<DateTime<Utc>> = None;
+        let mut next: Option<Timestamp> = None;
         for task in tasks {
             let queued = state.read(cx).tasks.queue.iter().any(|(id, ..)| *id == task.id);
             let skipped = background && !task.run_when_closed;
@@ -65,33 +65,34 @@ impl AppCommands {
                 continue;
             }
             let from = task.schedule_from.unwrap_or(task.updated_at);
-            let (due, reason) = match schedule::due(&task.schedule, from, now, &chrono::Local) {
-                Due::Wait(at) => {
-                    next = earliest(next, at);
-                    continue;
-                }
-                Due::Skip { due, next: at } => {
-                    next = earliest(next, Some(at));
-                    let reason = format!(
-                        "The run due {} was missed while OpenMango was closed or the computer \
+            let (due, reason) =
+                match schedule::due(&task.schedule, from, now, &jiff::tz::TimeZone::system()) {
+                    Due::Wait(at) => {
+                        next = earliest(next, at);
+                        continue;
+                    }
+                    Due::Skip { due, next: at } => {
+                        next = earliest(next, Some(at));
+                        let reason = format!(
+                            "The run due {} was missed while OpenMango was closed or the computer \
                          slept. The next one, {}, is soon, so this one didn't run.",
-                        local(due),
-                        local(at)
-                    );
-                    (due, reason)
-                }
-                Due::Run { due, .. } if state.read(cx).task_is_running(task.id) => (
-                    due,
-                    format!(
-                        "The run due {} didn't start: the one before it was still going.",
-                        local(due)
+                            local(due),
+                            local(at)
+                        );
+                        (due, reason)
+                    }
+                    Due::Run { due, .. } if state.read(cx).task_is_running(task.id) => (
+                        due,
+                        format!(
+                            "The run due {} didn't start: the one before it was still going.",
+                            local(due)
+                        ),
                     ),
-                ),
-                Due::Run { due, catch_up } => {
-                    state.update(cx, |app, _| app.tasks.queue.push((task.id, due, catch_up)));
-                    continue;
-                }
-            };
+                    Due::Run { due, catch_up } => {
+                        state.update(cx, |app, _| app.tasks.queue.push((task.id, due, catch_up)));
+                        continue;
+                    }
+                };
             state.update(cx, |app, cx| {
                 app.mark_task_due(task.id, due);
                 app.record_task_run(Run::skipped(task.id, reason), true);
@@ -140,7 +141,7 @@ impl AppCommands {
     }
 }
 
-fn earliest(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
+fn earliest(a: Option<Timestamp>, b: Option<Timestamp>) -> Option<Timestamp> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),
         (a, b) => a.or(b),
@@ -148,16 +149,16 @@ fn earliest(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<DateTi
 }
 
 /// "Sep 24, 02:00", in local time.
-fn local(at: DateTime<Utc>) -> String {
-    at.with_timezone(&chrono::Local).format("%b %-d, %H:%M").to_string()
+fn local(at: Timestamp) -> String {
+    crate::helpers::format::local(at).strftime("%b %-d, %H:%M").to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use chrono::{Local, NaiveTime, TimeZone as _};
     use gpui_kit::{AppContext as _, TestAppContext};
+    use jiff::civil::{Time, date};
 
     use super::*;
     use crate::connection::CancellationToken;
@@ -171,18 +172,15 @@ mod tests {
     use crate::tasks::schedule::Schedule;
     use crate::tasks::store::RunStore;
 
-    fn local(day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
-        Local
-            .with_ymd_and_hms(2026, 9, day, hour, minute, 0)
-            .earliest()
-            .unwrap()
-            .with_timezone(&Utc)
+    fn local(day: i8, hour: i8, minute: i8) -> Timestamp {
+        let at = date(2026, 9, day).at(hour, minute, 0, 0);
+        jiff::tz::TimeZone::system().to_ambiguous_zoned_datetime(at).earlier().unwrap().timestamp()
     }
 
     fn daily(name: &str, spec: TaskSpec) -> Task {
         let mut task = Task::new(name.into(), spec);
         task.schedule =
-            Schedule::Daily { at: NaiveTime::from_hms_opt(2, 0, 0).unwrap(), weekdays_only: false };
+            Schedule::Daily { at: Time::new(2, 0, 0, 0).unwrap(), weekdays_only: false };
         task.schedule_from = Some(local(20, 12, 0));
         task
     }
@@ -380,7 +378,7 @@ mod tests {
             let mut run = Run::start(task.id, RunTrigger::Schedule);
             run.status = status;
             run.error = (status == RunStatus::Failed).then(|| "Server unreachable".to_string());
-            run.finished_at = Some(Utc::now());
+            run.finished_at = Some(Timestamp::now());
             run
         };
         cx.update(|cx| AppState::open_tasks_from_notifications(state.clone(), cx));
@@ -460,7 +458,7 @@ mod tests {
         let end = |run: &mut Run, status: RunStatus| {
             run.status = status;
             run.error = (status == RunStatus::Failed).then(|| "Server unreachable".to_string());
-            run.finished_at = Some(Utc::now());
+            run.finished_at = Some(Timestamp::now());
         };
 
         // Run now says nothing: whoever pressed it is watching.
@@ -519,7 +517,7 @@ mod tests {
             run.status = status;
             run.failure = failure;
             run.error = (status == RunStatus::Failed).then(|| "Server unreachable".to_string());
-            run.finished_at = Some(Utc::now());
+            run.finished_at = Some(Timestamp::now());
             run
         };
         let notified = |app: &AppState| {
@@ -620,7 +618,7 @@ mod tests {
             let secret = Some(uuid::Uuid::new_v4());
             app.connections[1].secret_id = secret;
             app.approve_task(sync.id, false).unwrap();
-            app.set_connection_last_connected(target.id, Utc::now());
+            app.set_connection_last_connected(target.id, Timestamp::now());
             assert_eq!(app.connections[1].secret_id, secret);
             assert_eq!(app.task_approval_problem(app.task(sync.id).unwrap()), None);
 

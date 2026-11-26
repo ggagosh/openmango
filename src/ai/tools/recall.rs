@@ -69,8 +69,8 @@ impl Tool for RecallConversationsTool {
             .map(|hit| {
                 serde_json::json!({
                     "conversation": hit.conversation_id,
-                    "when": chrono::DateTime::from_timestamp_millis(hit.updated_ms)
-                        .map(|when| when.format("%Y-%m-%d").to_string())
+                    "when": jiff::Timestamp::from_millisecond(hit.updated_ms).ok()
+                        .map(|when| when.strftime("%Y-%m-%d").to_string())
                         .unwrap_or_default(),
                     "text": hit.text,
                 })

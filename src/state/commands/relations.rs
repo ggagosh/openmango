@@ -8,8 +8,8 @@ use mongodb::bson::{Bson, Document};
 
 use std::collections::HashSet;
 
-use chrono::Utc;
 use futures::StreamExt as _;
+use jiff::Timestamp;
 
 use mongodb::bson::doc;
 use uuid::Uuid;
@@ -634,7 +634,7 @@ async fn confirm(client: &Client, candidate: InferCandidate, sampled: u64) -> Op
         .await
         .ok()?;
 
-        best = score(&candidate, ids.len() as u32, hits as u32, sampled, Utc::now());
+        best = score(&candidate, ids.len() as u32, hits as u32, sampled, Timestamp::now());
         best.as_ref()?;
         if !should_escalate(ids.len(), hits, candidate.ids.len()) {
             break;

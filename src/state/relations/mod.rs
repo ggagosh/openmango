@@ -19,7 +19,7 @@ pub mod resolve;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// The format written to `relations.json`. Bumped only for changes old builds cannot read.
@@ -127,7 +127,7 @@ pub struct Evidence {
     pub hits: u32,
     /// Documents sampled to find the candidate in the first place.
     pub sampled: u64,
-    pub sampled_at: DateTime<Utc>,
+    pub sampled_at: Timestamp,
 }
 
 impl Evidence {
@@ -263,7 +263,7 @@ pub struct RelationGraph {
     /// When each database was last read in full. Its absence is what "nobody has looked yet"
     /// means, which an empty graph cannot say: a database read and found to have no relations
     /// is also empty.
-    inferred: BTreeMap<String, DateTime<Utc>>,
+    inferred: BTreeMap<String, Timestamp>,
 }
 
 impl RelationGraph {
@@ -280,11 +280,11 @@ impl RelationGraph {
     }
 
     /// When `database` was last read from end to end, if it ever was.
-    pub fn inferred_at(&self, database: &str) -> Option<DateTime<Utc>> {
+    pub fn inferred_at(&self, database: &str) -> Option<Timestamp> {
         self.inferred.get(database).copied()
     }
 
-    pub fn mark_inferred(&mut self, database: &str, at: DateTime<Utc>) {
+    pub fn mark_inferred(&mut self, database: &str, at: Timestamp) {
         self.inferred.insert(database.to_string(), at);
     }
 
@@ -588,7 +588,7 @@ pub struct RelationModel {
     /// Database name to when it was last read in full. Added after version 1 shipped; a file
     /// without it loads as "never", which is the truth about it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub inferred: BTreeMap<String, DateTime<Utc>>,
+    pub inferred: BTreeMap<String, Timestamp>,
 }
 
 impl Default for RelationModel {
@@ -767,7 +767,7 @@ mod tests {
             probed,
             hits,
             sampled: 1000,
-            sampled_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            sampled_at: Timestamp::from_second(1_700_000_000).unwrap(),
         }
     }
 
@@ -786,7 +786,7 @@ mod tests {
     #[test]
     fn when_a_database_was_read_survives_a_save_and_old_files_say_never() {
         let mut graph = RelationGraph::new();
-        let at = chrono::Utc::now();
+        let at = jiff::Timestamp::now();
         graph.mark_inferred("shop", at);
 
         let text = serde_json::to_string(&graph.to_model()).unwrap();

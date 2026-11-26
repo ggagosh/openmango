@@ -1680,16 +1680,16 @@ fn conversation_meta(conversation: &crate::ai::memory::Conversation, current: bo
 
 /// "just now", "2h ago", "Mar 4" — enough to tell one conversation from another.
 fn when_label(updated_ms: i64) -> String {
-    let Some(when) = chrono::DateTime::from_timestamp_millis(updated_ms) else {
+    let Some(when) = jiff::Timestamp::from_millisecond(updated_ms).ok() else {
         return String::new();
     };
-    let elapsed = chrono::Utc::now().signed_duration_since(when);
-    match (elapsed.num_minutes(), elapsed.num_hours(), elapsed.num_days()) {
+    let elapsed = jiff::Timestamp::now().duration_since(when);
+    match (elapsed.as_mins(), elapsed.as_hours(), elapsed.as_hours() / 24) {
         (minutes, _, _) if minutes < 1 => "just now".to_string(),
         (minutes, _, _) if minutes < 60 => format!("{minutes}m ago"),
         (_, hours, _) if hours < 24 => format!("{hours}h ago"),
         (_, _, days) if days < 7 => format!("{days}d ago"),
-        _ => when.format("%b %-d").to_string(),
+        _ => when.strftime("%b %-d").to_string(),
     }
 }
 
@@ -3237,7 +3237,7 @@ fn download_report_as_excel(
         }
     };
 
-    let now = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let now = jiff::ZonedDateTime::now().strftime("%Y%m%d_%H%M%S");
     let safe_title: String = title
         .chars()
         .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
@@ -3381,7 +3381,7 @@ mod tests {
             usage: None,
             user_message: ChatMessage::new(ChatRole::User, "how many orders?"),
             assistant_message: None,
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
         })
     }
 

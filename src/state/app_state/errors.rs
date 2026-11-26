@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use chrono::{DateTime, Local};
+use jiff::ZonedDateTime;
 use uuid::Uuid;
 
 use crate::error::ErrorReport;
@@ -27,7 +27,7 @@ pub enum ErrorAction {
 #[derive(Debug, Clone)]
 pub struct ErrorEntry {
     pub id: u64,
-    pub at: DateTime<Local>,
+    pub at: ZonedDateTime,
     pub report: ErrorReport,
     /// Raise a notification, because nothing else on screen shows this error.
     pub notify: bool,
@@ -79,7 +79,7 @@ impl AppState {
         log.last_id += 1;
         log.entries.push_back(ErrorEntry {
             id: log.last_id,
-            at: Local::now(),
+            at: jiff::ZonedDateTime::now(),
             report,
             notify,
             sticky: false,

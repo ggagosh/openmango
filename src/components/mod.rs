@@ -26,7 +26,6 @@ mod tests {
 
 pub mod action_bar;
 pub mod ai_blocks;
-mod busy_button;
 pub mod confirm;
 pub mod connection_identity;
 pub mod connection_manager;
@@ -46,7 +45,6 @@ pub mod tri_checkbox;
 mod unsaved_guard;
 pub mod updater;
 pub mod write_preview;
-pub use busy_button::busy_label;
 pub(crate) use confirm::with_scoped_production_authorizations;
 pub use confirm::{WriteConfirmation, WriteRequest, open_confirm_dialog, request_connection_write};
 pub use connection_identity::{

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
@@ -14,7 +14,7 @@ pub struct McpAudit {
 
 #[derive(Debug, Serialize)]
 pub struct McpAuditEvent {
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     pub correlation_id: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_id: Option<Uuid>,

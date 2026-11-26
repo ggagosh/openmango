@@ -859,7 +859,7 @@ impl FilterBuilderPanel {
                 let Date::Single(Some(date)) = date else {
                     return;
                 };
-                let formatted = format!("{}T00:00:00.000Z", date.format("%Y-%m-%d"));
+                let formatted = format!("{}T00:00:00.000Z", date.strftime("%Y-%m-%d"));
                 panel.apply_calendar_value(target, formatted, window, cx);
                 panel.calendar_target = None;
                 panel.calendar_state = None;

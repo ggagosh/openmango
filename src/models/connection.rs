@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -249,7 +249,7 @@ pub struct SavedConnection {
     #[serde(default)]
     pub confirm_production_writes: bool,
     pub uri: String,
-    pub last_connected: Option<DateTime<Utc>>,
+    pub last_connected: Option<Timestamp>,
     #[serde(default)]
     pub read_only: bool,
     #[serde(default)]
@@ -456,8 +456,8 @@ mod tests {
         let mut beta = SavedConnection::new("beta".into(), "mongodb://b".into());
         let alpha = SavedConnection::new("Alpha".into(), "mongodb://a".into());
         let mut old = SavedConnection::new("old".into(), "mongodb://o".into());
-        beta.last_connected = Some(Utc::now());
-        old.last_connected = Some(Utc::now() - chrono::Duration::days(3));
+        beta.last_connected = Some(Timestamp::now());
+        old.last_connected = Some(Timestamp::now() - jiff::SignedDuration::from_hours(24 * 3));
         let mut connections = [&alpha, &old, &beta];
         connections.sort_by(|a, b| a.cmp_recent_use(b));
         let names = connections.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();

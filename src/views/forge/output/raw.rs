@@ -219,7 +219,7 @@ impl ForgeView {
 fn build_raw_output_text(runs: &[super::super::types::ForgeRunOutput]) -> String {
     let mut out = String::new();
     for (idx, run) in runs.iter().enumerate() {
-        let time = run.started_at.with_timezone(&chrono::Local).format("%H:%M:%S");
+        let time = crate::helpers::format::local(run.started_at).strftime("%H:%M:%S");
         let header = if run.id == super::super::types::SYSTEM_RUN_ID {
             format!("[{time}] {}", run.code_preview)
         } else {
@@ -398,7 +398,7 @@ mod tests {
     fn late_prints_stay_before_the_final_value() {
         let mut run = ForgeRunOutput {
             id: 1,
-            started_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            started_at: jiff::Timestamp::from_second(0).unwrap(),
             code_preview: "print(1); 2".to_string(),
             raw_lines: Vec::new(),
             evaluation_lines: vec!["2".to_string()],

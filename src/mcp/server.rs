@@ -1920,7 +1920,7 @@ fn action_response(action: crate::actions::model::ProposedAction) -> ActionRespo
         data_classification: "trusted_openmango_metadata",
         action_id: action.id.to_string(),
         status: action_status_name(action.status).into(),
-        expires_at: action.expires_at.to_rfc3339(),
+        expires_at: action.expires_at.to_string(),
         hash_suffix,
         approval_required: action.status == ActionStatus::PendingApproval,
         operation_id: action.operation_id.map(|id| id.to_string()),
@@ -1968,7 +1968,7 @@ fn operation_response(operation: crate::actions::model::OperationRecord) -> Oper
         warnings: operation.warnings,
         recovery_required: operation.recovery_interlock
             || operation.status == OperationStatus::RecoveryRequired,
-        updated_at: operation.updated_at.to_rfc3339(),
+        updated_at: operation.updated_at.to_string(),
     }
 }
 
@@ -2072,8 +2072,8 @@ fn history_batch_response(summary: crate::history::BatchSummary) -> HistoryBatch
         collection: summary.collection,
         family: summary.family.as_str().to_string(),
         grouping: summary.grouping.as_str().to_string(),
-        first_wall_time: summary.first_wall_time.to_rfc3339(),
-        last_wall_time: summary.last_wall_time.to_rfc3339(),
+        first_wall_time: summary.first_wall_time.to_string(),
+        last_wall_time: summary.last_wall_time.to_string(),
         item_count: history_count(summary.item_count),
         revertible_count: history_count(summary.revertible_count),
         pending_restore_count: history_count(pending_restore_count),
@@ -2229,7 +2229,7 @@ fn begin_trace(
             database: database.to_string(),
             collection: collection.to_string(),
             family,
-            started_at: chrono::Utc::now(),
+            started_at: jiff::Timestamp::now(),
             completed_at: None,
             affected_count: None,
         });
@@ -2739,7 +2739,7 @@ impl McpRequestAuditMetadata {
         public_error_code: Option<&'static str>,
     ) -> McpAuditEvent {
         McpAuditEvent {
-            timestamp: chrono::Utc::now(),
+            timestamp: jiff::Timestamp::now(),
             correlation_id: Uuid::new_v4(),
             grant_id,
             session_id: self.session_id,
@@ -2786,7 +2786,7 @@ impl MutationAuditGuard {
         }
         if let Some(audit) = &self.audit {
             audit.record(McpAuditEvent {
-                timestamp: chrono::Utc::now(),
+                timestamp: jiff::Timestamp::now(),
                 correlation_id: Uuid::new_v4(),
                 grant_id: Some(self.grant_id),
                 session_id: self.session_id.clone(),

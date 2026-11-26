@@ -44,6 +44,11 @@ pub fn truncate_chars(text: &str, max: usize) -> String {
     out
 }
 
+/// `at` on this computer's clock, in the system time zone.
+pub fn local(at: jiff::Timestamp) -> jiff::ZonedDateTime {
+    at.to_zoned_datetime(jiff::tz::TimeZone::system())
+}
+
 #[cfg(test)]
 mod truncate_tests {
     #[test]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result};
-use chrono::{Duration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
@@ -13,7 +13,7 @@ use super::model::{
 };
 use super::store::ActionStore;
 
-const ACTION_TTL: Duration = Duration::hours(1);
+const ACTION_TTL: SignedDuration = SignedDuration::from_hours(1);
 
 #[derive(Debug, Clone)]
 pub struct ApprovalValidation {
@@ -42,7 +42,7 @@ impl ActionBroker {
     pub fn propose(&self, content: ProposedActionContent) -> Result<ProposedAction> {
         validate_proposal(&content)?;
         let content_hash = content_hash(&content)?;
-        let now = Utc::now();
+        let now = Timestamp::now();
         let _guard = self
             .mutation_lock
             .lock()
@@ -114,7 +114,7 @@ impl ActionBroker {
             action.status = ActionStatus::Stale;
             action.decision = Some(ActionDecision {
                 actor: actor.to_string(),
-                decided_at: Utc::now(),
+                decided_at: Timestamp::now(),
                 reason: Some(reason.to_string()),
             });
             self.store.save_action(&action)?;
@@ -122,7 +122,7 @@ impl ActionBroker {
         }
 
         let operation_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let operation = OperationRecord {
             version: OPERATION_FORMAT_VERSION,
             id: operation_id,
@@ -169,7 +169,7 @@ impl ActionBroker {
         );
         action.status = ActionStatus::Rejected;
         action.decision =
-            Some(ActionDecision { actor: actor.to_string(), decided_at: Utc::now(), reason });
+            Some(ActionDecision { actor: actor.to_string(), decided_at: Timestamp::now(), reason });
         self.store.save_action(&action)?;
         Ok(action)
     }
@@ -203,7 +203,7 @@ impl ActionBroker {
             "Operation cannot be cancelled in its current state"
         );
         operation.status = OperationStatus::CancelRequested;
-        operation.updated_at = Utc::now();
+        operation.updated_at = Timestamp::now();
         self.store.save_operation(&operation)?;
         if let Ok(cancellations) = self.cancellations.lock()
             && let Some(cancellation) = cancellations.get(&operation.id)
@@ -241,7 +241,7 @@ impl ActionBroker {
     }
 
     fn expire_if_needed(&self, mut action: ProposedAction) -> Result<ProposedAction> {
-        if action.status == ActionStatus::PendingApproval && action.expires_at <= Utc::now() {
+        if action.status == ActionStatus::PendingApproval && action.expires_at <= Timestamp::now() {
             action.status = ActionStatus::Expired;
             self.store.save_action(&action)?;
         }
@@ -274,7 +274,7 @@ fn validate_proposal(content: &ProposedActionContent) -> Result<()> {
 }
 
 fn validate_approval(action: &ProposedAction, validation: &ApprovalValidation) -> Result<()> {
-    anyhow::ensure!(action.expires_at > Utc::now(), "approval expired");
+    anyhow::ensure!(action.expires_at > Timestamp::now(), "approval expired");
     anyhow::ensure!(validation.prerequisites_satisfied, "prerequisites changed");
     anyhow::ensure!(action.content.policy == validation.policy, "policy changed");
     anyhow::ensure!(

@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::NaiveDate;
 use gpui_kit::component::calendar::{CalendarEvent, CalendarState, Date};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::table::TableState;
@@ -72,14 +71,14 @@ pub struct CellCalendar {
 }
 
 /// The `YYYY-MM-DD` a date's edit text starts with, as the date editor writes it.
-fn leading_date(text: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(text.get(..10)?, "%Y-%m-%d").ok()
+fn leading_date(text: &str) -> Option<jiff::civil::Date> {
+    jiff::civil::Date::strptime("%Y-%m-%d", text.get(..10)?).ok()
 }
 
 /// `text` with its leading day replaced by `day`, keeping the time and offset after it. Text
 /// that does not start with a day becomes just the day, which the date parser also reads.
-fn with_date(text: &str, day: NaiveDate) -> String {
-    let day = day.format("%Y-%m-%d").to_string();
+fn with_date(text: &str, day: jiff::civil::Date) -> String {
+    let day = day.strftime("%Y-%m-%d").to_string();
     match leading_date(text) {
         Some(_) => format!("{day}{}", &text[10..]),
         None => day,
@@ -1263,7 +1262,7 @@ mod inline_edit_tests {
 
     #[test]
     fn picking_a_day_keeps_the_typed_time_and_offset() {
-        let day = chrono::NaiveDate::from_ymd_opt(2026, 12, 24).unwrap();
+        let day = jiff::civil::date(2026, 12, 24);
         assert_eq!(super::with_date("2026-11-03T09:30:00+04:00", day), "2026-12-24T09:30:00+04:00");
         assert_eq!(super::with_date("2026-11-03", day), "2026-12-24");
         assert_eq!(super::with_date("not a date", day), "2026-12-24");

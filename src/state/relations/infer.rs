@@ -6,7 +6,7 @@
 //! estimate the first half, so a candidate carries the size of the sample that produced it and
 //! is never treated as proof.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use mongodb::bson::{Bson, Document, oid::ObjectId};
 
 use super::resolve::{Reference, reference_at};
@@ -295,7 +295,7 @@ pub fn score(
     probed: u32,
     hits: u32,
     sampled: u64,
-    at: DateTime<Utc>,
+    at: Timestamp,
 ) -> Option<Relation> {
     if probed == 0 || hits == 0 {
         return None;
@@ -626,7 +626,8 @@ mod tests {
         // An extension table that mirrors its parent's keys: both hold every probed id, so the
         // evidence cannot separate them.
         let source = FieldRef::new("shop", "orders", "userId");
-        let evidence = Evidence { probed: 10, hits: 10, sampled: 1000, sampled_at: Utc::now() };
+        let evidence =
+            Evidence { probed: 10, hits: 10, sampled: 1000, sampled_at: Timestamp::now() };
         let mirror = Relation::candidate(
             source.clone(),
             FieldRef::id_of("shop", "user_profiles"),
@@ -725,8 +726,8 @@ mod tests {
             target: FieldRef::id_of("shop", "audit"),
             ids: ids(10),
         };
-        assert!(score(&candidate, 10, 0, 1000, Utc::now()).is_none());
-        assert!(score(&candidate, 0, 0, 1000, Utc::now()).is_none());
+        assert!(score(&candidate, 10, 0, 1000, Timestamp::now()).is_none());
+        assert!(score(&candidate, 0, 0, 1000, Timestamp::now()).is_none());
     }
 
     #[test]
@@ -736,7 +737,7 @@ mod tests {
             target: FieldRef::id_of("shop", "users"),
             ids: ids(200),
         };
-        let at = Utc::now();
+        let at = Timestamp::now();
 
         // Twelve distinct values, all of them in `users`, is that field's whole population.
         // Treating it as weaker than a bigger sample would hide every low-cardinality
@@ -766,8 +767,8 @@ mod tests {
             target: FieldRef::id_of("shop", "users"),
             ids: ids(50),
         };
-        let partial = score(&candidate, 50, 45, 1000, Utc::now()).unwrap();
-        let clean = score(&candidate, 50, 50, 1000, Utc::now()).unwrap();
+        let partial = score(&candidate, 50, 45, 1000, Timestamp::now()).unwrap();
+        let clean = score(&candidate, 50, 50, 1000, Timestamp::now()).unwrap();
 
         assert!(partial.confidence < clean.confidence);
         assert!((partial.confidence - 0.9).abs() < 0.001);
@@ -792,19 +793,19 @@ mod tests {
             source.clone(),
             FieldRef::id_of("shop", "user_profiles"),
             0.7,
-            Evidence { probed: 10, hits: 10, sampled: 1000, sampled_at: Utc::now() },
+            Evidence { probed: 10, hits: 10, sampled: 1000, sampled_at: Timestamp::now() },
         );
         let stronger = Relation::candidate(
             source.clone(),
             FieldRef::id_of("shop", "users"),
             0.97,
-            Evidence { probed: 200, hits: 200, sampled: 1000, sampled_at: Utc::now() },
+            Evidence { probed: 200, hits: 200, sampled: 1000, sampled_at: Timestamp::now() },
         );
         let other = Relation::candidate(
             FieldRef::new("shop", "orders", "items[].productId"),
             FieldRef::id_of("shop", "products"),
             0.94,
-            Evidence { probed: 50, hits: 50, sampled: 1000, sampled_at: Utc::now() },
+            Evidence { probed: 50, hits: 50, sampled: 1000, sampled_at: Timestamp::now() },
         );
 
         let kept = best_per_field(vec![weaker, stronger, other]);

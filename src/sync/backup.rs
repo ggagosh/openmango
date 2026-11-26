@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::Utc;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::actions::ActionStore;
@@ -32,7 +32,7 @@ pub fn create_verified_backup(
     };
     collections.sort();
     let absent = !connection.databases.iter().any(|candidate| candidate == database);
-    let started_at = Utc::now();
+    let started_at = Timestamp::now();
     let mut manifest = BackupManifest {
         version: 1,
         backup_id,
@@ -55,7 +55,7 @@ pub fn create_verified_backup(
     if absent {
         manifest.process_succeeded = true;
         manifest.verified = true;
-        manifest.completed_at = Some(Utc::now());
+        manifest.completed_at = Some(Timestamp::now());
         store.save_backup_manifest(&manifest).map_err(safe_error)?;
         return Ok(manifest);
     }
@@ -84,7 +84,7 @@ pub fn create_verified_backup(
         }
     }
     verify_archive(&mut manifest, &archive_path, database)?;
-    manifest.completed_at = Some(Utc::now());
+    manifest.completed_at = Some(Timestamp::now());
     store.save_backup_manifest(&manifest).map_err(safe_error)?;
     Ok(manifest)
 }

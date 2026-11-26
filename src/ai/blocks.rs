@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -338,7 +338,7 @@ pub struct ChatMessage {
     /// If empty (e.g. old workspace data), falls back to parsing `content`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<ContentBlock>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 impl ChatMessage {
@@ -357,7 +357,7 @@ impl ChatMessage {
         } else {
             parse_content_to_blocks(&content)
         };
-        Self { id: Uuid::new_v4(), role, tone, content, blocks, created_at: Utc::now() }
+        Self { id: Uuid::new_v4(), role, tone, content, blocks, created_at: Timestamp::now() }
     }
 }
 
@@ -369,7 +369,7 @@ pub struct AiTurn {
     pub usage: Option<TurnUsage>,
     pub user_message: ChatMessage,
     pub assistant_message: Option<ChatMessage>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 /// Everything the namer needs, collected on the main thread so the work can leave it.
@@ -552,7 +552,7 @@ impl AiChatState {
             usage: None,
             user_message,
             assistant_message: None,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         };
         self.entries.push(AiChatEntry::Turn(turn));
         self.current_turn_id = Some(turn_id);

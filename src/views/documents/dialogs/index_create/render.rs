@@ -9,7 +9,7 @@ use gpui_kit::component::{Disableable as _, Icon, IconName, Selectable as _, Siz
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::components::{Button, busy_label, cancel_button};
+use crate::components::{Button, cancel_button};
 use crate::state::AppCommands;
 use crate::theme::{fonts, spacing};
 use crate::views::documents::dialogs::shared::styled_dropdown_button;
@@ -438,19 +438,18 @@ impl Render for IndexCreateDialog {
                     .flex_shrink_0()
                     .child(cancel_button("cancel-index"))
                     .child(
-                        busy_label(
-                            Button::new("create-index").primary(),
-                            Size::Medium,
-                            primary_label,
-                            self.creating,
-                        )
-                        .tooltip(format!("{primary_label} ({SUBMIT_SHORTCUT})"))
-                        .on_click({
-                            let view = view.clone();
-                            move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                                Self::submit(view.clone(), window, cx);
-                            }
-                        }),
+                        Button::new("create-index")
+                            .primary()
+                            .with_size(Size::Medium)
+                            .loading(self.creating)
+                            .label(primary_label)
+                            .tooltip(format!("{primary_label} ({SUBMIT_SHORTCUT})"))
+                            .on_click({
+                                let view = view.clone();
+                                move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                                    Self::submit(view.clone(), window, cx);
+                                }
+                            }),
                     ),
             );
 

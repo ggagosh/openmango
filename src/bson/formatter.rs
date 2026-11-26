@@ -1,11 +1,9 @@
 //! BSON value formatting utilities for display and editing.
 
-use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use chrono::{SecondsFormat, TimeZone};
 use mongodb::bson::spec::BinarySubtype;
 use mongodb::bson::{Binary, Bson, DateTime, UuidRepresentation};
 use serde::{Deserialize, Serialize};
@@ -38,17 +36,21 @@ pub fn format_datetime_utc(dt: DateTime) -> String {
 }
 
 /// A date as RFC 3339 in `zone`, offset included, so the text names the same instant and parses
-/// back. `None` when the date is outside the range chrono can place in a zone.
-pub fn format_datetime_in<Tz: TimeZone>(dt: DateTime, zone: &Tz) -> Option<String>
-where
-    Tz::Offset: Display,
-{
-    let utc = chrono::DateTime::from_timestamp_millis(dt.timestamp_millis())?;
-    Some(utc.with_timezone(zone).to_rfc3339_opts(SecondsFormat::AutoSi, false))
+/// back. `None` when the date is outside the range jiff can place in a zone. Milliseconds are
+/// shown only when there are some, always as three digits.
+pub fn format_datetime_in(dt: DateTime, zone: &jiff::tz::TimeZone) -> Option<String> {
+    let millis = dt.timestamp_millis();
+    let at = jiff::Timestamp::from_millisecond(millis).ok()?.to_zoned_datetime(zone.clone());
+    let format = if millis.rem_euclid(1000) == 0 {
+        "%Y-%m-%dT%H:%M:%S%:z"
+    } else {
+        "%Y-%m-%dT%H:%M:%S%.3f%:z"
+    };
+    Some(at.strftime(format).to_string())
 }
 
 fn format_datetime_local(dt: DateTime) -> String {
-    format_datetime_in(dt, &chrono::Local).unwrap_or_else(|| format_datetime_utc(dt))
+    format_datetime_in(dt, &jiff::tz::TimeZone::system()).unwrap_or_else(|| format_datetime_utc(dt))
 }
 
 /// A date in the zone the user chose to see dates in.
@@ -64,9 +66,7 @@ pub fn format_datetime_displayed(dt: DateTime) -> String {
 pub fn date_display_label() -> String {
     match date_display() {
         DateDisplay::Utc => "UTC".to_string(),
-        DateDisplay::Local => {
-            utc_offset_label(chrono::Local::now().offset().local_minus_utc() / 60)
-        }
+        DateDisplay::Local => utc_offset_label(jiff::ZonedDateTime::now().offset().seconds() / 60),
     }
 }
 
@@ -148,7 +148,7 @@ pub fn bson_value_details(value: &Bson) -> Vec<(&'static str, String)> {
             if date_display() == DateDisplay::Local {
                 rows.swap(0, 1);
             }
-            let now = chrono::Utc::now().timestamp_millis();
+            let now = jiff::Timestamp::now().as_millisecond();
             rows.push(("Ago", relative_age(dt.timestamp_millis(), now)));
             rows.push(("Epoch", format!("{} ms", dt.timestamp_millis())));
             rows
@@ -404,10 +404,15 @@ mod display_tests {
     #[test]
     fn a_date_drawn_in_a_zone_is_the_same_instant_and_parses_back() {
         let dt = DateTime::parse_rfc3339_str("2024-01-31T09:30:00Z").unwrap();
-        let zone = chrono::FixedOffset::east_opt(4 * 3600).unwrap();
+        let zone = jiff::tz::TimeZone::fixed(jiff::tz::offset(4));
         let shown = format_datetime_in(dt, &zone).unwrap();
         assert_eq!(shown, "2024-01-31T13:30:00+04:00");
         assert_eq!(crate::bson::parse_date_input(&shown), Some(dt));
+        let with_millis = DateTime::parse_rfc3339_str("2024-01-31T09:30:00.120Z").unwrap();
+        assert_eq!(
+            format_datetime_in(with_millis, &zone).unwrap(),
+            "2024-01-31T13:30:00.120+04:00"
+        );
         // Whatever the rows show, the clipboard gets UTC.
         assert_eq!(format_bson_for_clipboard(&Bson::DateTime(dt)), "2024-01-31T09:30:00Z");
     }

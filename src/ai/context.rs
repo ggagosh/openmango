@@ -212,8 +212,8 @@ pub fn build_ai_context(
     // date and everything about the current collection follow, because those move.
     w.raw(BASE_PROMPT);
 
-    let now = chrono::Local::now();
-    let date_info = format!("Today is {} ({})", now.format("%Y-%m-%d, %A"), now.format("%Z"));
+    let now = jiff::ZonedDateTime::now();
+    let date_info = format!("Today is {} ({})", now.strftime("%Y-%m-%d, %A"), now.strftime("%Z"));
 
     let conn_id = match state.selected_connection_id() {
         Some(id) => id,

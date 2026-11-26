@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use mongodb::bson::Document;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -193,7 +193,7 @@ impl QueryDefinition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryHistoryEntry {
     pub id: Uuid,
-    pub executed_at: DateTime<Utc>,
+    pub executed_at: Timestamp,
     pub definition: QueryDefinition,
 }
 
@@ -240,8 +240,8 @@ pub struct SavedQuery {
     pub tags: Vec<String>,
     #[serde(default)]
     pub scope: SavedQueryScope,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
     pub definition: QueryDefinition,
 }
 
@@ -301,7 +301,7 @@ impl QueryLibrary {
         if definition.content.is_empty() || definition.content.may_contain_credentials() {
             return false;
         }
-        let now = Utc::now();
+        let now = Timestamp::now();
         if let Some(latest) = self.history.first_mut()
             && latest.definition == definition
         {
@@ -350,7 +350,7 @@ impl QueryLibrary {
             return Err(format!("A saved query named \"{}\" already exists.", input.name));
         }
         let id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         self.saved.push(SavedQuery {
             id,
             name: input.name,
@@ -401,7 +401,7 @@ impl QueryLibrary {
         query.tags = input.tags;
         query.scope = input.scope;
         query.definition = input.definition;
-        query.updated_at = Utc::now();
+        query.updated_at = Timestamp::now();
         self.sort_saved();
         Ok(())
     }
@@ -418,7 +418,7 @@ impl QueryLibrary {
             .find(|query| query.id == id)
             .ok_or_else(|| "That saved query no longer exists.".to_string())?;
         query.name = name.to_string();
-        query.updated_at = Utc::now();
+        query.updated_at = Timestamp::now();
         self.sort_saved();
         Ok(())
     }
@@ -439,7 +439,7 @@ impl QueryLibrary {
             number += 1;
         }
         let id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         self.saved.push(SavedQuery {
             id,
             name,
@@ -487,7 +487,7 @@ impl QueryLibrary {
                 SavedQueryScope::Connection => report.connection += 1,
             }
             let id = Uuid::new_v4();
-            let now = Utc::now();
+            let now = Timestamp::now();
             self.saved.push(SavedQuery {
                 id,
                 name: input.name,
@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     fn legacy_saved_query_defaults_metadata_and_connection_scope() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let json = serde_json::json!({
             "id": Uuid::new_v4(),
             "name": "Legacy",

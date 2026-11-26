@@ -590,7 +590,7 @@ impl AppState {
 
     /// Record that a whole database has been read, so it stops being offered.
     pub fn mark_database_inferred(&mut self, database: &str) {
-        self.relations.mark_inferred(database, chrono::Utc::now());
+        self.relations.mark_inferred(database, jiff::Timestamp::now());
         self.save_relations();
     }
 

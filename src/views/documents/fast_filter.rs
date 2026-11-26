@@ -1,6 +1,7 @@
 use std::fmt;
 
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Utc};
+use jiff::civil::Date;
+use jiff::{SignedDuration, Timestamp, ToSpan as _};
 use mongodb::bson::{Bson, DateTime as BsonDateTime, Document, oid::ObjectId};
 
 use crate::bson::{
@@ -509,7 +510,7 @@ fn parse_datetime_literal(raw: &str) -> Option<BsonDateTime> {
 
 fn parse_relative_period(raw: &str) -> Option<ParsedDateValue> {
     let normalized = normalize_date_shortcut(raw);
-    let now = Utc::now();
+    let now = Timestamp::now();
 
     let (direction, rest) = if let Some(rest) = normalized.strip_prefix("last") {
         (-1, rest)
@@ -526,17 +527,18 @@ fn parse_relative_period(raw: &str) -> Option<ParsedDateValue> {
     }
     let amount = rest[..digit_count].parse::<i64>().ok()?;
     let unit = &rest[digit_count..];
-    let duration = match unit {
-        "m" | "min" | "mins" | "minute" | "minutes" => Duration::minutes(amount),
-        "h" | "hr" | "hrs" | "hour" | "hours" => Duration::hours(amount),
-        "d" | "day" | "days" => Duration::days(amount),
-        "w" | "week" | "weeks" => Duration::weeks(amount),
+    let minutes_per_unit = match unit {
+        "m" | "min" | "mins" | "minute" | "minutes" => 1,
+        "h" | "hr" | "hrs" | "hour" | "hours" => 60,
+        "d" | "day" | "days" => 24 * 60,
+        "w" | "week" | "weeks" => 7 * 24 * 60,
         _ => return None,
     };
+    let minutes = amount.checked_mul(minutes_per_unit)?.checked_mul(direction)?;
 
-    let shifted_dt = now + duration * direction;
-    let now = bson_datetime_from_millis(now.timestamp_millis());
-    let shifted = bson_datetime_from_millis(shifted_dt.timestamp_millis());
+    let shifted_dt = now.checked_add(SignedDuration::from_mins(minutes)).ok()?;
+    let now = bson_datetime_from_millis(now.as_millisecond());
+    let shifted = bson_datetime_from_millis(shifted_dt.as_millisecond());
     if direction < 0 {
         Some(ParsedDateValue::Range { start: Some(shifted), end: Some(now) })
     } else {
@@ -546,29 +548,31 @@ fn parse_relative_period(raw: &str) -> Option<ParsedDateValue> {
 
 fn parse_named_period(raw: &str) -> Option<ParsedDateValue> {
     let normalized = normalize_date_shortcut(raw);
-    let today = Utc::now().date_naive();
-    let now = bson_datetime_from_millis(Utc::now().timestamp_millis());
+    let today = utc_today();
+    let now = bson_datetime_from_millis(Timestamp::now().as_millisecond());
 
     match normalized.as_str() {
         "now" => Some(ParsedDateValue::Instant(now)),
         "today" => Some(day_period(today)),
-        "yesterday" => Some(day_period(today - Duration::days(1))),
-        "tomorrow" => Some(day_period(today + Duration::days(1))),
+        "yesterday" => Some(day_period(today.yesterday().ok()?)),
+        "tomorrow" => Some(day_period(today.tomorrow().ok()?)),
         "thisweek" | "week" => Some(week_period(today)),
-        "lastweek" | "previousweek" | "prevweek" => Some(week_period(today - Duration::weeks(1))),
-        "nextweek" => Some(week_period(today + Duration::weeks(1))),
-        "thismonth" | "month" => Some(month_period(today.year(), today.month())),
+        "lastweek" | "previousweek" | "prevweek" => {
+            Some(week_period(today.checked_sub(1.week()).ok()?))
+        }
+        "nextweek" => Some(week_period(today.checked_add(1.week()).ok()?)),
+        "thismonth" | "month" => Some(month_period(year_of(today), month_of(today))),
         "lastmonth" | "previousmonth" | "prevmonth" => {
-            let (year, month) = add_months(today.year(), today.month(), -1);
+            let (year, month) = add_months(year_of(today), month_of(today), -1);
             Some(month_period(year, month))
         }
         "nextmonth" => {
-            let (year, month) = add_months(today.year(), today.month(), 1);
+            let (year, month) = add_months(year_of(today), month_of(today), 1);
             Some(month_period(year, month))
         }
-        "thisyear" | "year" => Some(year_period(today.year())),
-        "lastyear" | "previousyear" | "prevyear" => Some(year_period(today.year() - 1)),
-        "nextyear" => Some(year_period(today.year() + 1)),
+        "thisyear" | "year" => Some(year_period(year_of(today))),
+        "lastyear" | "previousyear" | "prevyear" => Some(year_period(year_of(today) - 1)),
+        "nextyear" => Some(year_period(year_of(today) + 1)),
         "wtd" => {
             let start = start_of_week(today);
             Some(ParsedDateValue::Range {
@@ -577,11 +581,11 @@ fn parse_named_period(raw: &str) -> Option<ParsedDateValue> {
             })
         }
         "mtd" => Some(ParsedDateValue::Range {
-            start: Some(bson_datetime_from_date(ymd(today.year(), today.month(), 1)?)),
+            start: Some(bson_datetime_from_date(ymd(year_of(today), month_of(today), 1)?)),
             end: Some(now),
         }),
         "ytd" => Some(ParsedDateValue::Range {
-            start: Some(bson_datetime_from_date(ymd(today.year(), 1, 1)?)),
+            start: Some(bson_datetime_from_date(ymd(year_of(today), 1, 1)?)),
             end: Some(now),
         }),
         _ => parse_month_name_period(&normalized, today)
@@ -596,8 +600,8 @@ fn parse_calendar_period(raw: &str) -> Option<ParsedDateValue> {
         return Some(quarter_period(year, quarter));
     }
 
-    if let Ok(date) = NaiveDate::parse_from_str(normalized, "%Y-%m-%d")
-        .or_else(|_| NaiveDate::parse_from_str(normalized, "%Y/%m/%d"))
+    if let Ok(date) =
+        Date::strptime("%Y-%m-%d", normalized).or_else(|_| Date::strptime("%Y/%m/%d", normalized))
     {
         return Some(day_period(date));
     }
@@ -638,9 +642,9 @@ fn parse_year_quarter(raw: &str) -> Option<(i32, u32)> {
     }
     if let Some(quarter_raw) = lower.strip_prefix('q') {
         let quarter = quarter_raw.parse::<u32>().ok()?;
-        let today = Utc::now().date_naive();
-        let mut year = today.year();
-        let current_quarter = ((today.month() - 1) / 3) + 1;
+        let today = utc_today();
+        let mut year = year_of(today);
+        let current_quarter = ((month_of(today) - 1) / 3) + 1;
         if quarter > current_quarter {
             year -= 1;
         }
@@ -649,24 +653,24 @@ fn parse_year_quarter(raw: &str) -> Option<(i32, u32)> {
     None
 }
 
-fn parse_named_quarter_period(normalized: &str, today: NaiveDate) -> Option<ParsedDateValue> {
+fn parse_named_quarter_period(normalized: &str, today: Date) -> Option<ParsedDateValue> {
     let quarter = normalized.strip_prefix('q')?.parse::<u32>().ok()?;
     if !(1..=4).contains(&quarter) {
         return None;
     }
-    let current_quarter = ((today.month() - 1) / 3) + 1;
-    let mut year = today.year();
+    let current_quarter = ((month_of(today) - 1) / 3) + 1;
+    let mut year = year_of(today);
     if quarter > current_quarter {
         year -= 1;
     }
     Some(quarter_period(year, quarter))
 }
 
-fn parse_month_name_period(normalized: &str, today: NaiveDate) -> Option<ParsedDateValue> {
+fn parse_month_name_period(normalized: &str, today: Date) -> Option<ParsedDateValue> {
     let (month, suffix) = month_name_prefix(normalized)?;
     let year = if suffix.is_empty() {
-        let mut year = today.year();
-        if month > today.month() {
+        let mut year = year_of(today);
+        if month > month_of(today) {
             year -= 1;
         }
         year
@@ -750,18 +754,18 @@ fn date_range_end(raw: &str) -> Option<BsonDateTime> {
     }
 }
 
-fn day_period(date: NaiveDate) -> ParsedDateValue {
+fn day_period(date: Date) -> ParsedDateValue {
     ParsedDateValue::Range {
         start: Some(bson_datetime_from_date(date)),
-        end: Some(bson_datetime_from_date(date + Duration::days(1))),
+        end: date.tomorrow().ok().map(bson_datetime_from_date),
     }
 }
 
-fn week_period(date: NaiveDate) -> ParsedDateValue {
+fn week_period(date: Date) -> ParsedDateValue {
     let start = start_of_week(date);
     ParsedDateValue::Range {
         start: Some(bson_datetime_from_date(start)),
-        end: Some(bson_datetime_from_date(start + Duration::weeks(1))),
+        end: start.checked_add(1.week()).ok().map(bson_datetime_from_date),
     }
 }
 
@@ -792,8 +796,21 @@ fn quarter_period(year: i32, quarter: u32) -> ParsedDateValue {
     }
 }
 
-fn start_of_week(date: NaiveDate) -> NaiveDate {
-    date - Duration::days(date.weekday().num_days_from_monday() as i64)
+fn start_of_week(date: Date) -> Date {
+    date.checked_sub(i64::from(date.weekday().to_monday_zero_offset()).days()).unwrap_or(date)
+}
+
+/// Shortcuts such as `today` name UTC days, as dates are stored.
+fn utc_today() -> Date {
+    Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC).date()
+}
+
+fn year_of(date: Date) -> i32 {
+    i32::from(date.year())
+}
+
+fn month_of(date: Date) -> u32 {
+    date.month() as u32
 }
 
 fn add_months(year: i32, month: u32, delta: i32) -> (i32, u32) {
@@ -801,16 +818,14 @@ fn add_months(year: i32, month: u32, delta: i32) -> (i32, u32) {
     (zero_based.div_euclid(12), zero_based.rem_euclid(12) as u32 + 1)
 }
 
-fn ymd(year: i32, month: u32, day: u32) -> Option<NaiveDate> {
-    NaiveDate::from_ymd_opt(year, month, day)
+fn ymd(year: i32, month: u32, day: u32) -> Option<Date> {
+    Date::new(year.try_into().ok()?, month.try_into().ok()?, day.try_into().ok()?).ok()
 }
 
-fn bson_datetime_from_date(date: NaiveDate) -> BsonDateTime {
-    bson_datetime_from_naive(date.and_hms_opt(0, 0, 0).expect("valid midnight"))
-}
-
-fn bson_datetime_from_naive(date: NaiveDateTime) -> BsonDateTime {
-    bson_datetime_from_millis(date.and_utc().timestamp_millis())
+/// Midnight UTC at the start of `date`.
+fn bson_datetime_from_date(date: Date) -> BsonDateTime {
+    let midnight = date.to_zoned_datetime(jiff::tz::TimeZone::UTC).expect("UTC has every midnight");
+    bson_datetime_from_millis(midnight.timestamp().as_millisecond())
 }
 
 fn bson_datetime_from_millis(ms: i64) -> BsonDateTime {
@@ -1078,6 +1093,32 @@ fn is_quoted(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{compile_filter_input, format_compiled_filter};
+
+    /// Calendar shortcuts name whole UTC days, weeks, months, quarters and years.
+    #[test]
+    fn calendar_shortcuts_cover_their_utc_period() {
+        use super::{ParsedDateValue, parse_date_shortcut};
+        let utc = |text: &str| mongodb::bson::DateTime::parse_rfc3339_str(text).unwrap();
+        let range = |raw: &str| match parse_date_shortcut(raw) {
+            Some(ParsedDateValue::Range { start, end }) => (start.unwrap(), end.unwrap()),
+            other => panic!("{raw}: {:?}", other.is_some()),
+        };
+        assert_eq!(range("2024-02-29"), (utc("2024-02-29T00:00:00Z"), utc("2024-03-01T00:00:00Z")));
+        assert_eq!(range("2024/12/31"), (utc("2024-12-31T00:00:00Z"), utc("2025-01-01T00:00:00Z")));
+        assert_eq!(range("2024-02"), (utc("2024-02-01T00:00:00Z"), utc("2024-03-01T00:00:00Z")));
+        assert_eq!(range("2024q4"), (utc("2024-10-01T00:00:00Z"), utc("2025-01-01T00:00:00Z")));
+        assert_eq!(range("2024"), (utc("2024-01-01T00:00:00Z"), utc("2025-01-01T00:00:00Z")));
+        assert_eq!(range("dec2023"), (utc("2023-12-01T00:00:00Z"), utc("2024-01-01T00:00:00Z")));
+        assert!(parse_date_shortcut("2024-02-30").is_none());
+        // A week runs Monday to Monday.
+        let (start, end) = range("thisweek");
+        let monday = jiff::Timestamp::from_millisecond(start.timestamp_millis()).unwrap();
+        assert_eq!(
+            monday.to_zoned_datetime(jiff::tz::TimeZone::UTC).weekday(),
+            jiff::civil::Weekday::Monday
+        );
+        assert_eq!(end.timestamp_millis() - start.timestamp_millis(), 7 * 86_400_000);
+    }
 
     #[test]
     fn document_ids_compile_to_typed_id_queries_without_reinterpreting_field_names() {

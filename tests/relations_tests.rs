@@ -8,9 +8,9 @@ mod common;
 
 use std::time::Duration;
 
-use chrono::Utc;
 use common::MongoTestContainer;
 use futures::TryStreamExt as _;
+use jiff::Timestamp;
 use mongodb::bson::{Bson, Document, doc, oid::ObjectId};
 use openmango::connection::ops::relations::{find_by_id_async, probe_id_async, probe_ids_async};
 use openmango::state::relations::infer::{
@@ -309,9 +309,13 @@ async fn inference_finds_the_relations_a_shop_actually_has() {
         )
         .await
         .unwrap();
-        if let Some(relation) =
-            score(&candidate, ids.len() as u32, hits as u32, documents.len() as u64, Utc::now())
-        {
+        if let Some(relation) = score(
+            &candidate,
+            ids.len() as u32,
+            hits as u32,
+            documents.len() as u64,
+            Timestamp::now(),
+        ) {
             confirmed.push(relation);
         }
     }
@@ -366,7 +370,7 @@ async fn a_field_pointing_nowhere_produces_no_relation() {
         .await
         .unwrap();
         assert_eq!(
-            score(&candidate, ids.len() as u32, hits as u32, 20, Utc::now()),
+            score(&candidate, ids.len() as u32, hits as u32, 20, Timestamp::now()),
             None,
             "ids that exist nowhere are not a foreign key"
         );

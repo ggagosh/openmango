@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use gpui_kit::UniformListScrollHandle;
+use jiff::Timestamp;
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -20,7 +20,7 @@ pub enum ForgeOutputTab {
 
 pub struct ForgeRunOutput {
     pub id: u64,
-    pub started_at: DateTime<Utc>,
+    pub started_at: Timestamp,
     pub code_preview: String,
     pub raw_lines: Vec<String>,
     pub evaluation_lines: Vec<String>,

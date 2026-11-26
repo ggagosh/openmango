@@ -992,7 +992,7 @@ fn render_mcp_grants_section(
                         state.update(cx, |state, cx| {
                             state.settings.mcp.enabled = false;
                             state.settings.mcp.legacy_access = false;
-                            let now = chrono::Utc::now();
+                            let now = jiff::Timestamp::now();
                             for grant in &mut state.settings.mcp.grants {
                                 if grant.active() {
                                     grant.revoked_at = Some(now);
@@ -1111,7 +1111,7 @@ fn render_mcp_grants_section(
                                             .iter_mut()
                                             .find(|grant| grant.id == id)
                                         {
-                                            grant.revoked_at = Some(chrono::Utc::now());
+                                            grant.revoked_at = Some(jiff::Timestamp::now());
                                         }
                                         if !state.settings.mcp.legacy_access
                                             && !state
@@ -1152,13 +1152,13 @@ fn render_mcp_grants_section(
             &grant.label,
             &format!(
                 "Created {} · {} · {} · {} · {}",
-                grant.created_at.format("%Y-%m-%d"),
+                grant.created_at.strftime("%Y-%m-%d"),
                 if active { "Active" } else { "Revoked" },
                 mcp_client_config_target(grant.client),
                 mcp_client_setup_note(grant.client),
                 grant
                     .last_used_at
-                    .map(|last_used| format!("Last used {}", last_used.format("%Y-%m-%d %H:%M")))
+                    .map(|last_used| format!("Last used {}", last_used.strftime("%Y-%m-%d %H:%M")))
                     .unwrap_or_else(|| "Never used".to_string()),
             ),
             actions,
@@ -1295,7 +1295,7 @@ fn create_mcp_client_grant(state: Entity<AppState>, client: McpClientKind, cx: &
                         id,
                         label,
                         client,
-                        created_at: chrono::Utc::now(),
+                        created_at: jiff::Timestamp::now(),
                         last_used_at: None,
                         revoked_at: None,
                     });

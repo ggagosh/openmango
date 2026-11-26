@@ -130,12 +130,12 @@ fn status_icon(status: RunStatus, cx: &App) -> AnyElement {
 }
 
 /// Local date and time, e.g. "Sep 23, 14:02".
-fn when(at: chrono::DateTime<chrono::Utc>) -> String {
-    at.with_timezone(&chrono::Local).format("%b %-d, %H:%M").to_string()
+fn when(at: jiff::Timestamp) -> String {
+    crate::helpers::format::local(at).strftime("%b %-d, %H:%M").to_string()
 }
 
 fn duration(run: &Run) -> Option<String> {
-    let seconds = (run.finished_at? - run.started_at).num_seconds().max(0);
+    let seconds = (run.finished_at? - run.started_at).as_secs().max(0);
     Some(if seconds < 60 {
         format!("{seconds} s")
     } else if seconds < 3_600 {
@@ -250,9 +250,9 @@ fn schedule_summary(task: &Task) -> String {
 }
 
 /// When the task's schedule runs it next.
-fn next_run(task: &Task) -> Option<chrono::DateTime<chrono::Local>> {
-    let now = chrono::Local::now();
-    let from = task.schedule_from.map(|from| from.with_timezone(&chrono::Local));
+fn next_run(task: &Task) -> Option<jiff::ZonedDateTime> {
+    let now = jiff::ZonedDateTime::now();
+    let from = task.schedule_from.map(crate::helpers::format::local);
     task.schedule.next_after(&from.filter(|from| *from > now).unwrap_or(now))
 }
 
@@ -296,8 +296,8 @@ fn last_result(app: &AppState, task: &Task) -> String {
             "{} {}",
             run.status.label(),
             crate::bson::relative_age(
-                run.started_at.timestamp_millis(),
-                chrono::Utc::now().timestamp_millis()
+                run.started_at.as_millisecond(),
+                jiff::Timestamp::now().as_millisecond()
             )
         ),
     }
@@ -708,7 +708,7 @@ impl TasksView {
                 "Due now, waiting for another task to finish.".to_string()
             } else {
                 next_run(task)
-                    .map_or("No run coming up.".into(), |at| format!("Next: {}", run_time(at)))
+                    .map_or("No run coming up.".into(), |at| format!("Next: {}", run_time(&at)))
             };
             let closed =
                 if task.run_when_closed { " · also while OpenMango is closed" } else { "" };
@@ -1124,7 +1124,7 @@ impl TasksView {
                     .text_xs()
                     .font_family(cx.theme().mono_font_family.clone())
                     .child(div().flex_shrink_0().text_color(muted).child(
-                        line.at.with_timezone(&chrono::Local).format("%H:%M:%S").to_string(),
+                        crate::helpers::format::local(line.at).strftime("%H:%M:%S").to_string(),
                     ))
                     .children(
                         level.map(|(label, color)| {

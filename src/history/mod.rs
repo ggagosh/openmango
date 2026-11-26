@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use futures::{StreamExt as _, TryStreamExt as _};
+use jiff::Timestamp;
 use mongodb::bson::{Document, doc};
 use mongodb::change_stream::event::{ChangeStreamEvent, OperationType};
 use mongodb::options::{FullDocumentBeforeChangeType, FullDocumentType};
@@ -352,9 +352,9 @@ impl HistoryService {
 
     pub fn register_trace(&self, descriptor: TraceDescriptor) {
         if let Ok(mut traces) = self.traces.lock() {
-            let now = Utc::now();
+            let now = Timestamp::now();
             traces.retain(|trace| {
-                now - trace.descriptor.started_at < chrono::Duration::minutes(5)
+                now.duration_since(trace.descriptor.started_at) < jiff::SignedDuration::from_mins(5)
                     && trace.matched_events < trace.descriptor.affected_count.unwrap_or(u64::MAX)
             });
             traces.push(TraceState { descriptor, matched_events: 0 });
@@ -365,7 +365,7 @@ impl HistoryService {
         if let Ok(mut traces) = self.traces.lock()
             && let Some(trace) = traces.iter_mut().find(|trace| trace.descriptor.id == trace_id)
         {
-            trace.descriptor.completed_at = Some(Utc::now());
+            trace.descriptor.completed_at = Some(Timestamp::now());
             trace.descriptor.affected_count = Some(affected_count);
         }
     }
@@ -658,8 +658,10 @@ impl HistoryService {
                 resume = Some(token.clone());
                 let wall_time = event
                     .wall_time
-                    .and_then(|value| DateTime::from_timestamp_millis(value.timestamp_millis()))
-                    .unwrap_or_else(Utc::now);
+                    .and_then(|value| {
+                        jiff::Timestamp::from_millisecond(value.timestamp_millis()).ok()
+                    })
+                    .unwrap_or_else(Timestamp::now);
                 let cluster_time =
                     event.cluster_time.map(|value| format!("{}:{}", value.time, value.increment));
                 let event_database = event.ns.as_ref().map(|namespace| namespace.db.clone());
@@ -686,7 +688,7 @@ impl HistoryService {
                                         &error,
                                         token.clone(),
                                         cluster_time.clone(),
-                                        wall_time.timestamp_millis(),
+                                        wall_time.as_millisecond(),
                                     )
                                     .is_err()
                                 {
@@ -714,7 +716,7 @@ impl HistoryService {
                             CONNECTION_CURSOR_SCOPE.to_string(),
                             token,
                             cluster_time,
-                            wall_time.timestamp_millis(),
+                            wall_time.as_millisecond(),
                         )
                         .is_err()
                     {
@@ -738,7 +740,7 @@ impl HistoryService {
                         "A supported change event had no namespace.",
                         token,
                         cluster_time,
-                        wall_time.timestamp_millis(),
+                        wall_time.as_millisecond(),
                     );
                     continue;
                 };
@@ -763,7 +765,7 @@ impl HistoryService {
                             "MongoDB did not return the exact required pre/post image for a supported change.",
                             token,
                             cluster_time,
-                            wall_time.timestamp_millis(),
+                            wall_time.as_millisecond(),
                         )
                         .is_err()
                     {
@@ -852,7 +854,7 @@ impl HistoryService {
                 collection,
                 kind: kind.chars().take(64).collect(),
                 reason: reason.chars().take(500).collect(),
-                created_at: Utc::now(),
+                created_at: Timestamp::now(),
                 resolved: false,
             });
         }
@@ -864,14 +866,14 @@ impl HistoryService {
         database: &str,
         collection: &str,
         family: OperationFamily,
-        wall_time: DateTime<Utc>,
+        wall_time: Timestamp,
     ) -> Option<Uuid> {
         let Ok(mut traces) = self.traces.lock() else {
             return None;
         };
-        let now = Utc::now();
+        let now = Timestamp::now();
         traces.retain(|trace| {
-            now - trace.descriptor.started_at < chrono::Duration::minutes(5)
+            now.duration_since(trace.descriptor.started_at) < jiff::SignedDuration::from_mins(5)
                 && trace.matched_events < trace.descriptor.affected_count.unwrap_or(u64::MAX)
         });
         let candidates = traces
@@ -885,10 +887,10 @@ impl HistoryService {
                     && descriptor.database == database
                     && descriptor.collection == collection
                     && descriptor.family == family
-                    && wall_time >= descriptor.started_at - chrono::Duration::seconds(1)
+                    && wall_time >= descriptor.started_at - jiff::SignedDuration::from_secs(1)
                     && wall_time
                         <= descriptor.completed_at.unwrap_or(descriptor.started_at)
-                            + chrono::Duration::seconds(1)
+                            + jiff::SignedDuration::from_secs(1)
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
@@ -1475,7 +1477,7 @@ mod tests {
         )
         .unwrap();
         let connection_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         assert_eq!(
             service.match_trace(connection_id, "app", "items", OperationFamily::Update, now,),
             None

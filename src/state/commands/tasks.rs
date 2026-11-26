@@ -207,7 +207,7 @@ impl AppCommands {
                 if let Launch::Schedule { due, .. } = launch
                     && tab.config.mode == TransferMode::Export
                 {
-                    let at = due.with_timezone(&chrono::Local).naive_local();
+                    let at = crate::helpers::format::local(due).datetime();
                     tab.config.file_path = stamped_path(&tab.config.file_path, at);
                 }
                 Self::start_transfer_task(state, task, tab, launch, window, cx);
@@ -456,9 +456,14 @@ impl AppCommands {
         let cancellation = CancellationToken::new();
         // A scheduled run stops retrying when the task's next run is due.
         let retry_until = matches!(trigger, RunTrigger::Schedule | RunTrigger::CatchUp)
-            .then(|| task.schedule.next_after(&chrono::Local::now()))
+            .then(|| task.schedule.next_after(&jiff::ZonedDateTime::now()))
             .flatten()
-            .and_then(|next| (next.with_timezone(&chrono::Utc) - chrono::Utc::now()).to_std().ok())
+            .and_then(|next| {
+                std::time::Duration::try_from(
+                    next.timestamp().duration_since(jiff::Timestamp::now()),
+                )
+                .ok()
+            })
             .map(|wait| std::time::Instant::now() + wait);
         state.update(cx, |app, cx| {
             app.record_task_run(run, true);
@@ -1656,7 +1661,7 @@ impl AppCommands {
         let when = app
             .task_run(task_id, undo.run_id)
             .map(|run| {
-                run.started_at.with_timezone(&chrono::Local).format("%b %-d, %H:%M").to_string()
+                crate::helpers::format::local(run.started_at).strftime("%b %-d, %H:%M").to_string()
             })
             .unwrap_or_default();
         let request = WriteRequest::new(
@@ -1826,7 +1831,7 @@ impl Self_ {
 pub(super) enum Launch {
     Run,
     Preview,
-    Schedule { due: chrono::DateTime<chrono::Utc>, catch_up: bool },
+    Schedule { due: jiff::Timestamp, catch_up: bool },
 }
 
 impl Launch {
@@ -2590,16 +2595,16 @@ mod tests {
         assert!(state.read_with(cx, |app, _| app.tasks.active.is_empty()));
 
         // Scheduled runs: nobody is asked. The connection is Production from here on.
-        use chrono::TimeZone as _;
-        let at = |day: u32| {
-            chrono::Local
-                .with_ymd_and_hms(2027, 3, day, 2, 0, 0)
-                .earliest()
+        let at = |day: i8| {
+            let at = jiff::civil::date(2027, 3, day).at(2, 0, 0, 0);
+            jiff::tz::TimeZone::system()
+                .to_ambiguous_zoned_datetime(at)
+                .earlier()
                 .unwrap()
-                .with_timezone(&chrono::Utc)
+                .timestamp()
         };
         let daily = crate::tasks::schedule::Schedule::Daily {
-            at: chrono::NaiveTime::from_hms_opt(2, 0, 0).unwrap(),
+            at: jiff::civil::Time::new(2, 0, 0, 0).unwrap(),
             weekdays_only: false,
         };
         let schedule = |cx: &mut VisualTestContext, task: &SavedTask, safety, keep, from| {

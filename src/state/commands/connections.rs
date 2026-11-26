@@ -1,5 +1,5 @@
-use chrono::Utc;
 use gpui_kit::{App, AppContext as _, Entity};
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::models::ActiveConnection;
@@ -88,7 +88,7 @@ impl AppCommands {
                     Ok((client, databases, runtime_meta)) => {
                         state.update(cx, |state, cx| {
                             let mut saved = saved.clone();
-                            saved.last_connected = Some(Utc::now());
+                            saved.last_connected = Some(Timestamp::now());
                             state.insert_active_connection(
                                 connection_id,
                                 ActiveConnection {

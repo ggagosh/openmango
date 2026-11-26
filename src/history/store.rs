@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
-use chrono::{TimeZone as _, Utc};
+use jiff::Timestamp;
 use rusqlite::{Connection, OptionalExtension as _, params};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
@@ -138,7 +138,7 @@ impl HistoryStore {
         let bytes = encrypted_payload.len() as i64;
         self.call(move |connection| {
             let transaction = connection.transaction()?;
-            let recorded_at_ms = Utc::now().timestamp_millis();
+            let recorded_at_ms = Timestamp::now().as_millisecond();
             let duplicate: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM history_items WHERE resume_token_hash = ?1)",
                 [token_hash.as_slice()],
@@ -152,7 +152,7 @@ impl HistoryStore {
                     encrypted_cursor,
                     &token_hash,
                     event.cluster_time.as_deref(),
-                    event.wall_time.timestamp_millis(),
+                    event.wall_time.as_millisecond(),
                 )?;
                 transaction.commit()?;
                 return Ok(None);
@@ -194,7 +194,7 @@ impl HistoryStore {
                         event.trace_id.map(|id| id.to_string()),
                         transaction_hash.as_ref().map(|hash| hash.as_slice()),
                         event.cluster_time,
-                        event.wall_time.timestamp_millis(),
+                        event.wall_time.as_millisecond(),
                         recorded_at_ms,
                     ],
                 )?;
@@ -236,7 +236,7 @@ impl HistoryStore {
                 params![
                     batch_id.to_string(),
                     event.cluster_time,
-                    event.wall_time.timestamp_millis(),
+                    event.wall_time.as_millisecond(),
                     revertible,
                     bytes,
                     recorded_at_ms,
@@ -249,7 +249,7 @@ impl HistoryStore {
                 encrypted_cursor,
                 &token_hash,
                 event.cluster_time.as_deref(),
-                event.wall_time.timestamp_millis(),
+                event.wall_time.as_millisecond(),
             )?;
             transaction.commit()?;
             Ok(Some(batch_id))
@@ -568,7 +568,7 @@ impl HistoryStore {
                 transaction.execute(
                     "UPDATE history_batches SET status = 'partially_restored', updated_at_ms = ?2
                      WHERE id = ?1",
-                    params![id, Utc::now().timestamp_millis()],
+                    params![id, Timestamp::now().as_millisecond()],
                 )?;
             }
             transaction.commit()?;
@@ -581,7 +581,7 @@ impl HistoryStore {
             let changed = connection.execute(
                 "UPDATE history_batches SET status = 'restoring', updated_at_ms = ?2
                  WHERE id = ?1 AND status != 'restoring'",
-                params![batch_id.to_string(), Utc::now().timestamp_millis()],
+                params![batch_id.to_string(), Timestamp::now().as_millisecond()],
             )?;
             if changed != 1 {
                 bail!("History batch is already restoring or unavailable");
@@ -631,7 +631,7 @@ impl HistoryStore {
             };
             connection.execute(
                 "UPDATE history_batches SET status = ?2, updated_at_ms = ?3 WHERE id = ?1",
-                params![batch_id.to_string(), status.as_str(), Utc::now().timestamp_millis()],
+                params![batch_id.to_string(), status.as_str(), Timestamp::now().as_millisecond()],
             )?;
             Ok(RestoreProgress { done: true, ..progress })
         })
@@ -666,8 +666,8 @@ impl HistoryStore {
         max_bytes: u64,
     ) -> Result<Usage> {
         self.call(move |connection| {
-            let cutoff =
-                Utc::now().timestamp_millis() - i64::from(max_age_days).saturating_mul(86_400_000);
+            let cutoff = Timestamp::now().as_millisecond()
+                - i64::from(max_age_days).saturating_mul(86_400_000);
             connection.execute(
                 "DELETE FROM history_batches
                  WHERE connection_id = ?1 AND status != 'restoring' AND last_wall_time_ms < ?2",
@@ -862,7 +862,7 @@ fn find_open_batch(
                     event.database,
                     event.collection,
                     event.family.as_str(),
-                    event.wall_time.timestamp_millis(),
+                    event.wall_time.as_millisecond(),
                     OBSERVED_IDLE_MS,
                     OBSERVED_MAX_MS,
                     to_sql(MAX_BATCH_ITEMS),
@@ -910,7 +910,7 @@ fn insert_gap(
             collection,
             kind,
             reason,
-            Utc::now().timestamp_millis(),
+            Timestamp::now().as_millisecond(),
         ],
     )?;
     Ok(id)
@@ -957,7 +957,7 @@ fn close_idle_batches(connection: &Connection, now_ms: i64) -> Result<()> {
 }
 
 fn list_batches(connection: &Connection, query: BatchQuery) -> Result<Page<BatchSummary>> {
-    close_idle_batches(connection, Utc::now().timestamp_millis())?;
+    close_idle_batches(connection, Timestamp::now().as_millisecond())?;
     let limit = query.limit.clamp(1, PAGE_LIMIT);
     let database = query.database;
     let collection = query.collection;
@@ -1025,8 +1025,10 @@ fn batch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BatchSummary> {
         family: OperationFamily::parse(&family).unwrap_or(OperationFamily::Update),
         grouping: GroupingKind::parse(&grouping).unwrap_or(GroupingKind::Observed),
         trace_id: row.get::<_, Option<String>>(6)?.and_then(|value| Uuid::parse_str(&value).ok()),
-        first_wall_time: Utc.timestamp_millis_opt(row.get(7)?).single().unwrap_or_else(Utc::now),
-        last_wall_time: Utc.timestamp_millis_opt(row.get(8)?).single().unwrap_or_else(Utc::now),
+        first_wall_time: Timestamp::from_millisecond(row.get(7)?)
+            .unwrap_or_else(|_| Timestamp::now()),
+        last_wall_time: Timestamp::from_millisecond(row.get(8)?)
+            .unwrap_or_else(|_| Timestamp::now()),
         item_count: from_sql(row.get(9)?),
         revertible_count: from_sql(row.get(10)?),
         conflict_count: from_sql(row.get(11)?),
@@ -1048,7 +1050,7 @@ fn gap_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryGap> {
         collection: row.get(3)?,
         kind: row.get(4)?,
         reason: row.get(5)?,
-        created_at: Utc.timestamp_millis_opt(row.get(6)?).single().unwrap_or_else(Utc::now),
+        created_at: Timestamp::from_millisecond(row.get(6)?).unwrap_or_else(|_| Timestamp::now()),
         resolved: row.get(7)?,
     })
 }
@@ -1062,7 +1064,7 @@ fn update_restore_counts(transaction: &rusqlite::Transaction<'_>, batch_id: Uuid
             failed_count = (SELECT COUNT(*) FROM history_items WHERE batch_id = ?1 AND restore_outcome = 'failed'),
             updated_at_ms = ?2
          WHERE id = ?1",
-        params![batch_id.to_string(), Utc::now().timestamp_millis()],
+        params![batch_id.to_string(), Timestamp::now().as_millisecond()],
     )?;
     Ok(())
 }
@@ -1172,12 +1174,12 @@ fn sanitize(value: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Duration;
+    use jiff::SignedDuration as Duration;
     use mongodb::bson::doc;
 
     use super::*;
 
-    fn event(connection_id: Uuid, index: u64, wall_time: chrono::DateTime<Utc>) -> RecordedEvent {
+    fn event(connection_id: Uuid, index: u64, wall_time: jiff::Timestamp) -> RecordedEvent {
         RecordedEvent {
             connection_id,
             database: "app".into(),
@@ -1204,7 +1206,7 @@ mod tests {
     fn event_and_cursor_are_atomic_and_resume_tokens_deduplicate() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let event = event(connection_id, 1, Utc::now());
+        let event = event(connection_id, 1, Timestamp::now());
         assert!(store.record_event(event.clone()).unwrap().is_some());
         assert!(store.record_event(event).unwrap().is_none());
         assert!(store.load_cursor(connection_id, CONNECTION_CURSOR_SCOPE).unwrap().is_some());
@@ -1225,11 +1227,11 @@ mod tests {
     fn transaction_attributed_and_observed_grouping_are_honest() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let mut transaction = event(connection_id, 1, now);
         transaction.transaction_key = Some(vec![1, 2, 3]);
         let first = store.record_event(transaction).unwrap().unwrap();
-        let mut same = event(connection_id, 2, now + Duration::milliseconds(10));
+        let mut same = event(connection_id, 2, now + Duration::from_millis(10));
         same.transaction_key = Some(vec![1, 2, 3]);
         assert_eq!(store.record_event(same).unwrap(), Some(first));
 
@@ -1241,11 +1243,11 @@ mod tests {
 
         let observed = store.record_event(event(connection_id, 4, now)).unwrap().unwrap();
         assert_eq!(
-            store.record_event(event(connection_id, 5, now + Duration::milliseconds(100))).unwrap(),
+            store.record_event(event(connection_id, 5, now + Duration::from_millis(100))).unwrap(),
             Some(observed)
         );
         assert_ne!(
-            store.record_event(event(connection_id, 6, now + Duration::seconds(2))).unwrap(),
+            store.record_event(event(connection_id, 6, now + Duration::from_secs(2))).unwrap(),
             Some(observed)
         );
     }
@@ -1254,13 +1256,13 @@ mod tests {
     fn restore_pages_are_newest_first_for_repeated_document_updates() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let mut first = event(connection_id, 1, now);
         first.document_key = doc! { "_id": 1 };
         first.before = Some(doc! { "_id": 1, "value": "A" });
         first.after = Some(doc! { "_id": 1, "value": "B" });
         let batch = store.record_event(first).unwrap().unwrap();
-        let mut second = event(connection_id, 2, now + Duration::milliseconds(10));
+        let mut second = event(connection_id, 2, now + Duration::from_millis(10));
         second.document_key = doc! { "_id": 1 };
         second.before = Some(doc! { "_id": 1, "value": "B" });
         second.after = Some(doc! { "_id": 1, "value": "C" });
@@ -1276,11 +1278,14 @@ mod tests {
     fn closed_batches_are_never_reopened() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let now = Utc::now() - Duration::seconds(2);
+        let now = Timestamp::now() - Duration::from_secs(2);
         let first = store.record_event(event(connection_id, 1, now)).unwrap().unwrap();
         store
             .call(|connection| {
-                close_idle_batches(connection, Utc::now().timestamp_millis() + OBSERVED_IDLE_MS + 1)
+                close_idle_batches(
+                    connection,
+                    Timestamp::now().as_millisecond() + OBSERVED_IDLE_MS + 1,
+                )
             })
             .unwrap();
         let second = store.record_event(event(connection_id, 2, now)).unwrap().unwrap();
@@ -1291,7 +1296,7 @@ mod tests {
     fn listing_during_backlog_does_not_fragment_observed_batch() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let source_time = Utc::now() - Duration::seconds(2);
+        let source_time = Timestamp::now() - Duration::from_secs(2);
         for index in 0..10 {
             store.record_event(event(connection_id, index, source_time)).unwrap();
             store
@@ -1322,7 +1327,7 @@ mod tests {
     fn ten_thousand_events_produce_one_observed_batch() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         for index in 0..10_000 {
             store.record_event(event(connection_id, index, now)).unwrap();
         }
@@ -1352,7 +1357,7 @@ mod tests {
                 "exact image unavailable",
                 vec![9, 8, 7],
                 Some("1:1".into()),
-                Utc::now().timestamp_millis(),
+                Timestamp::now().as_millisecond(),
             )
             .unwrap();
         assert_eq!(
@@ -1368,7 +1373,7 @@ mod tests {
     fn expired_resume_token_gap_and_cursor_abandonment_are_atomic() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        store.record_event(event(connection_id, 1, Utc::now())).unwrap();
+        store.record_event(event(connection_id, 1, Timestamp::now())).unwrap();
         assert!(store.load_cursor(connection_id, CONNECTION_CURSOR_SCOPE).unwrap().is_some());
 
         store
@@ -1389,7 +1394,7 @@ mod tests {
     fn missing_cursor_gap_is_durable_and_deduplicated() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        store.record_event(event(connection_id, 1, Utc::now())).unwrap();
+        store.record_event(event(connection_id, 1, Timestamp::now())).unwrap();
         store.delete_cursor_for_test(connection_id, CONNECTION_CURSOR_SCOPE).unwrap();
         assert!(store.load_cursor(connection_id, CONNECTION_CURSOR_SCOPE).unwrap().is_none());
         let first = store
@@ -1418,7 +1423,7 @@ mod tests {
     fn partial_restore_outcomes_remain_honest() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let batch = store.record_event(event(connection_id, 1, now)).unwrap().unwrap();
         store.record_event(event(connection_id, 2, now)).unwrap();
         let details = store.get_batch(batch, 0, 10).unwrap();
@@ -1449,7 +1454,7 @@ mod tests {
     fn cancelled_restore_keeps_pending_items_resumable() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let batch = store.record_event(event(connection_id, 1, now)).unwrap().unwrap();
         store.record_event(event(connection_id, 2, now)).unwrap();
         let details = store.get_batch(batch, 0, 10).unwrap();
@@ -1469,13 +1474,13 @@ mod tests {
     fn retention_byte_limit_purges_oldest_eligible_batch_first() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let oldest = store
-            .record_event(event(connection_id, 1, now - Duration::seconds(4)))
+            .record_event(event(connection_id, 1, now - Duration::from_secs(4)))
             .unwrap()
             .unwrap();
         let newest = store
-            .record_event(event(connection_id, 2, now - Duration::seconds(2)))
+            .record_event(event(connection_id, 2, now - Duration::from_secs(2)))
             .unwrap()
             .unwrap();
         assert_ne!(oldest, newest);
@@ -1510,9 +1515,10 @@ mod tests {
     fn retention_purges_oldest_by_age_and_bytes_but_not_active_restore() {
         let (_directory, store) = store();
         let connection_id = Uuid::new_v4();
-        let old = Utc::now() - Duration::days(40);
+        let old = Timestamp::now() - Duration::from_hours(24 * 40);
         let old_batch = store.record_event(event(connection_id, 1, old)).unwrap().unwrap();
-        let active = store.record_event(event(connection_id, 2, Utc::now())).unwrap().unwrap();
+        let active =
+            store.record_event(event(connection_id, 2, Timestamp::now())).unwrap().unwrap();
         store.begin_restore(active).unwrap();
         store.apply_retention(connection_id, 30, 0).unwrap_err();
         let page = store

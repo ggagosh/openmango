@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -124,11 +124,11 @@ pub struct McpClientGrant {
     pub label: String,
     #[serde(default)]
     pub client: McpClientKind,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_used_at: Option<DateTime<Utc>>,
+    pub last_used_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revoked_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<Timestamp>,
 }
 
 impl McpClientGrant {
@@ -411,12 +411,12 @@ pub const FILENAME_PLACEHOLDERS: &[(&str, &str)] = &[
 
 /// Expand filename template placeholders
 pub fn expand_filename_template(template: &str, database: &str, collection: &str) -> String {
-    let now = chrono::Local::now();
+    let now = jiff::ZonedDateTime::now();
 
     template
-        .replace("${datetime}", &now.format("%Y-%m-%d_%H-%M-%S").to_string())
-        .replace("${date}", &now.format("%Y-%m-%d").to_string())
-        .replace("${time}", &now.format("%H-%M-%S").to_string())
+        .replace("${datetime}", &now.strftime("%Y-%m-%d_%H-%M-%S").to_string())
+        .replace("${date}", &now.strftime("%Y-%m-%d").to_string())
+        .replace("${time}", &now.strftime("%H-%M-%S").to_string())
         .replace("${database}", database)
         .replace("${collection}", collection)
 }
@@ -478,7 +478,7 @@ mod tests {
             id: Uuid::new_v4(),
             label: "Pi".into(),
             client: McpClientKind::Pi,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
             last_used_at: None,
             revoked_at: None,
         });
