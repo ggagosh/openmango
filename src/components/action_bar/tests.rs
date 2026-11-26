@@ -123,11 +123,13 @@ fn keyboard_stays_in_the_palette_and_steps_back_before_closing(cx: &mut TestAppC
     cx.simulate_keystrokes("backspace");
     draw(cx);
     assert_eq!(mode(cx), PaletteMode::All);
+    let query = |cx: &mut VisualTestContext| bar.read_with(cx, |bar, cx| bar.query_text(cx));
+    assert_eq!(query(cx), "theme", "going back restores the search");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" });
+    cx.simulate_keystrokes("backspace");
+    draw(cx);
 
     // A leading @ or # jumps to that scope and keeps the rest of the query.
-    let query = |cx: &mut VisualTestContext| {
-        bar.read_with(cx, |bar, cx| bar.command.as_ref().unwrap().read(cx).query(cx).to_string())
-    };
     cx.simulate_input("@prod");
     draw(cx);
     assert_eq!((mode(cx), query(cx).as_str()), (PaletteMode::Connect, "prod"));
@@ -175,4 +177,103 @@ fn palette_stays_centered_inside_narrow_windows(cx: &mut TestAppContext) {
         assert_eq!(card.left(), width - card.right(), "card centered in a {width:?} window");
         assert!(card.bottom() <= px(360.), "card fits a short window: {card:?}");
     }
+}
+
+#[gpui_kit::test]
+fn go_to_steps_into_a_connection_and_database_and_back_out(cx: &mut TestAppContext) {
+    use crate::models::{ActiveConnection, SavedConnection};
+
+    let (bar, _, cx) = open_palette(cx);
+    let saved = SavedConnection::new("Local".into(), "mongodb://localhost:27017".into());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let client = runtime.block_on(async {
+        mongodb::Client::with_options(mongodb::options::ClientOptions::default()).unwrap()
+    });
+    let state = bar.read_with(cx, |bar, _| bar.state.clone());
+    state.update(cx, |state, _| {
+        state.connections = vec![saved.clone()];
+        state.insert_active_connection(
+            saved.id,
+            ActiveConnection {
+                config: saved,
+                client,
+                databases: vec!["shop".into(), "logs".into()],
+                collections: std::collections::HashMap::from([
+                    ("shop".to_string(), vec!["orders".to_string(), "users".to_string()]),
+                    ("logs".to_string(), vec!["events".to_string()]),
+                ]),
+                collection_details: Default::default(),
+                runtime_meta: Default::default(),
+            },
+        );
+    });
+    let tags = |cx: &mut VisualTestContext| {
+        bar.read_with(cx, |bar, cx| {
+            bar.tags(cx).into_iter().map(|(_, tag)| tag.label.to_string()).collect::<Vec<_>>()
+        })
+    };
+    let query = |cx: &mut VisualTestContext| bar.read_with(cx, |bar, cx| bar.query_text(cx));
+    let rows = |cx: &mut VisualTestContext| {
+        draw(cx);
+        let mut rows = bar.read_with(cx, |bar, _| {
+            bar.groups
+                .iter()
+                .flat_map(|group| group.items.iter().map(|item| item.label.to_string()))
+                .collect::<Vec<_>>()
+        });
+        rows.sort();
+        rows
+    };
+
+    // Go to, empty, lists the connections; typing searches everything inside them.
+    cx.simulate_input("#");
+    assert_eq!((tags(cx), rows(cx)), (vec!["Go to".to_string()], vec!["Local".to_string()]));
+    cx.simulate_input("shop");
+    draw(cx);
+
+    // Tab on a database found from the top adds its connection's tag and its own.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(tags(cx), ["Go to", "Local", "shop"]);
+    assert_eq!(query(cx), "");
+    assert_eq!(rows(cx), ["orders", "users"]);
+
+    // Each Backspace removes one tag; the connection lists its databases.
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(tags(cx), ["Go to", "Local"]);
+    assert_eq!(rows(cx), ["logs", "shop"]);
+
+    // Back at the top, the search is as it was left.
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(tags(cx), ["Go to"]);
+    assert_eq!(query(cx), "shop");
+
+    // → at the end of the query goes in too, and Escape comes back out.
+    cx.simulate_keystrokes("right");
+    assert_eq!(tags(cx), ["Go to", "Local", "shop"]);
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    assert_eq!(tags(cx), ["Go to", "Local"]);
+
+    // A collection has nothing inside, so Tab leaves the tags alone.
+    cx.simulate_input("events");
+    draw(cx);
+    cx.simulate_keystrokes("tab");
+    assert_eq!(tags(cx), ["Go to", "Local"]);
+
+    // Clicking a tag removes it and the tags after it.
+    let click = |label: &str, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            bar.update(cx, |bar, cx| {
+                let (level, _) =
+                    bar.tags(cx).into_iter().find(|(_, tag)| tag.label == label).unwrap();
+                bar.back_to(level, window, cx);
+            })
+        });
+    };
+    click("Local", cx);
+    assert_eq!(tags(cx), ["Go to"]);
+    assert_eq!(query(cx), "shop");
+    click("Go to", cx);
+    assert!(tags(cx).is_empty());
+    assert_eq!(bar.read_with(cx, |bar, _| bar.mode), PaletteMode::All);
 }

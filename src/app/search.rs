@@ -231,6 +231,16 @@ pub(crate) fn completion_match_ranges(query: &str, item: &CompletionItem) -> Vec
     }
 }
 
+/// The bytes of a palette label to paint as matching `query`. Empty when the label itself does
+/// not match, as when only a row's detail or keywords did.
+pub(crate) fn label_match_ranges(query: &str, label: &str) -> Vec<Range<usize>> {
+    let query = query.trim();
+    if query.is_empty() || fuzzy_match_score(query, label).is_none() {
+        return Vec::new();
+    }
+    completion_match_ranges(query, &CompletionItem { label: label.into(), ..Default::default() })
+}
+
 fn normalize_search_text(text: &str) -> String {
     text.chars().flat_map(char::to_lowercase).collect()
 }
@@ -530,5 +540,9 @@ mod tests {
         assert_eq!(completion_match_ranges("\"use", &item("user.name")), vec![0..3]);
         assert_eq!(completion_match_ranges("usnm", &item("user.name")), vec![0..2, 5..6, 7..8]);
         assert!(completion_match_ranges("zz", &item("user.name")).is_empty());
+
+        assert_eq!(label_match_ranges("conn", "Connect to…"), vec![0..4]);
+        assert!(label_match_ranges("conn", "Open settings").is_empty());
+        assert!(label_match_ranges(" ", "Connect to…").is_empty());
     }
 }

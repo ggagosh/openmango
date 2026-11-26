@@ -14,34 +14,42 @@ use crate::state::TabKey;
 use crate::state::app_state::updater::UpdateStatus;
 use crate::state::settings::AppTheme;
 
-use super::types::{ActionCategory, ActionItem};
+use super::types::{ActionCategory, ActionItem, NavScope};
 
 /// Navigation: connections, databases, collections from active connections.
-pub fn navigation_actions(state: &AppState) -> Vec<ActionItem> {
+/// Connections, databases and collections, or only those inside `scope`.
+pub fn navigation_actions(state: &AppState, scope: &NavScope) -> Vec<ActionItem> {
     let mut actions = Vec::new();
     let active = state.active_connections_snapshot();
 
     for (conn_id, conn) in &active {
+        if scope.connection.as_ref().is_some_and(|(id, _)| id != conn_id) {
+            continue;
+        }
         let conn_name = &conn.config.name;
 
         // Connection-level entry
         actions.push(ActionItem {
+            available: scope.connection.is_none(),
             id: SharedString::from(format!("nav:conn:{}", conn_id)),
             label: SharedString::from(conn_name.clone()),
             detail: Some(SharedString::from("Connection")),
             category: ActionCategory::Navigation,
-            available: true,
+            connection: Some(ConnectionIdentity::from(&conn.config)),
             ..Default::default()
         });
 
         // Databases
         for db in &conn.databases {
+            if scope.database.as_ref().is_some_and(|scoped| scoped.as_ref() != db.as_str()) {
+                continue;
+            }
             actions.push(ActionItem {
+                available: scope.database.is_none(),
                 id: SharedString::from(format!("nav:db:{}:{}", conn_id, db)),
                 label: SharedString::from(db.clone()),
                 detail: Some(SharedString::from(conn_name.clone())),
                 category: ActionCategory::Navigation,
-                available: true,
                 priority: 10,
                 ..Default::default()
             });
