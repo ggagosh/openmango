@@ -107,7 +107,7 @@ pub fn open_error_history(state: Entity<AppState>, window: &mut Window, cx: &mut
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(entry.at.format("%H:%M:%S").to_string()),
+                                .child(entry.at.strftime("%H:%M:%S").to_string()),
                         )
                         .child(
                             ErrorCallout::new(format!("error-history-{}", entry.id), entry.report)

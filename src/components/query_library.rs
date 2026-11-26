@@ -4,7 +4,6 @@ use gpui_kit::component::button::ButtonVariants as _;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use chrono::{DateTime, Local, Utc};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::Dialog;
@@ -12,10 +11,11 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::components::file_picker::{FileFilter, FilePickerMode, open_file_dialog_async};
-use crate::components::{Button, ConnectionIdentity, busy_label, connection_identity_badge};
+use crate::components::{Button, ConnectionIdentity, connection_identity_badge};
 use crate::helpers::query_library_io;
 use crate::keyboard::RunForgeAll;
 use crate::state::{
@@ -158,7 +158,7 @@ struct LibraryItem {
     description: String,
     tags: Vec<String>,
     scope: SavedQueryScope,
-    timestamp: DateTime<Utc>,
+    timestamp: Timestamp,
     connection_name: String,
     definition: QueryDefinition,
 }
@@ -1410,18 +1410,16 @@ impl Render for QueryLibraryDialog {
                     )
                     .when(self.mode == LibraryMode::Saved, |row| {
                         row.child(
-                            busy_label(
-                                Button::new("query-library-import"),
-                                gpui_kit::component::Size::XSmall,
-                                "Import…",
-                                self.file_busy,
-                            )
-                            .on_click({
-                                let view = view.clone();
-                                move |_, window, cx| {
-                                    view.update(cx, |this, cx| this.start_import(window, cx));
-                                }
-                            }),
+                            Button::new("query-library-import")
+                                .with_size(gpui_kit::component::Size::XSmall)
+                                .loading(self.file_busy)
+                                .label("Import…")
+                                .on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| this.start_import(window, cx));
+                                    }
+                                }),
                         )
                         .child(
                             Button::new("query-library-export")
@@ -1575,6 +1573,6 @@ fn connection_label(state: &AppState, connection_id: Uuid) -> String {
     })
 }
 
-fn format_timestamp(timestamp: DateTime<Utc>) -> String {
-    timestamp.with_timezone(&Local).format("%b %-d, %H:%M").to_string()
+fn format_timestamp(timestamp: Timestamp) -> String {
+    crate::helpers::format::local(timestamp).strftime("%b %-d, %H:%M").to_string()
 }

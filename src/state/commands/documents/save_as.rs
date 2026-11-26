@@ -40,7 +40,7 @@ impl AppCommands {
         let collection = session_key.collection.clone();
         let database = session_key.database.clone();
         let filters = format.file_filters();
-        let now = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let now = jiff::ZonedDateTime::now().strftime("%Y%m%d_%H%M%S");
         let default_name = format!("{}_{}.{}", collection, now, format.extension());
 
         cx.spawn({
@@ -265,7 +265,7 @@ impl AppCommands {
 
         let collection = session_key.collection.clone();
         let filters = format.file_filters();
-        let now = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let now = jiff::ZonedDateTime::now().strftime("%Y%m%d_%H%M%S");
         let default_name = format!("{}_{}.{}", collection, now, format.extension());
 
         cx.spawn({

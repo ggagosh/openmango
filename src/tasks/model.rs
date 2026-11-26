@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -41,15 +41,15 @@ pub struct Task {
     /// The due time handled last, or when the schedule was set or resumed. The next run is the
     /// schedule's first time after it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schedule_from: Option<DateTime<Utc>>,
+    pub schedule_from: Option<Timestamp>,
     /// For a task that writes: what was approved when it got its schedule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<Approval>,
     /// A scheduled export keeps only this many of its newest files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_files: Option<u32>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 /// What was approved when a task that writes got its schedule. Scheduled runs stop when a
@@ -72,7 +72,7 @@ impl Approval {
 
 impl Task {
     pub fn new(name: String, spec: TaskSpec) -> Self {
-        let now = Utc::now();
+        let now = Timestamp::now();
         Self {
             version: TASK_FORMAT_VERSION,
             id: Uuid::new_v4(),
@@ -380,7 +380,7 @@ pub enum LogLevel {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogLine {
-    pub at: DateTime<Utc>,
+    pub at: Timestamp,
     pub level: LogLevel,
     pub message: String,
 }
@@ -407,8 +407,8 @@ pub struct Run {
     pub task_id: Uuid,
     pub trigger: RunTrigger,
     pub status: RunStatus,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: Option<DateTime<Utc>>,
+    pub started_at: Timestamp,
+    pub finished_at: Option<Timestamp>,
     pub collections: Vec<CollectionRun>,
     /// Why the run as a whole failed, when it failed before or outside any one collection.
     pub error: Option<String>,
@@ -439,7 +439,7 @@ impl Run {
             task_id,
             trigger,
             status: RunStatus::Running,
-            started_at: Utc::now(),
+            started_at: Timestamp::now(),
             finished_at: None,
             collections: Vec::new(),
             error: None,
@@ -452,7 +452,7 @@ impl Run {
 
     pub fn log(&mut self, level: LogLevel, message: impl Into<String>) {
         if self.log.len() < RUN_LOG_LIMIT {
-            self.log.push(LogLine { at: Utc::now(), level, message: message.into() });
+            self.log.push(LogLine { at: Timestamp::now(), level, message: message.into() });
         } else {
             self.log_dropped += 1;
         }
@@ -492,7 +492,7 @@ impl Run {
         } else {
             RunStatus::Succeeded
         };
-        self.finished_at = Some(Utc::now());
+        self.finished_at = Some(Timestamp::now());
     }
 
     pub fn documents(&self) -> u64 {

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -162,7 +162,7 @@ pub struct ProposedActionContent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionDecision {
     pub actor: String,
-    pub decided_at: DateTime<Utc>,
+    pub decided_at: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -173,8 +173,8 @@ pub struct ProposedAction {
     pub id: Uuid,
     pub content: ProposedActionContent,
     pub content_hash: String,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub expires_at: Timestamp,
     pub status: ActionStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<ActionDecision>,
@@ -183,7 +183,7 @@ pub struct ProposedAction {
 }
 
 impl ProposedAction {
-    pub fn is_pending(&self, now: DateTime<Utc>) -> bool {
+    pub fn is_pending(&self, now: Timestamp) -> bool {
         self.status == ActionStatus::PendingApproval && self.expires_at > now
     }
 
@@ -225,10 +225,10 @@ pub struct OperationRecord {
     pub target_database: String,
     pub status: OperationStatus,
     pub progress: OperationProgress,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -247,9 +247,9 @@ pub struct BackupManifest {
     pub operation_id: Uuid,
     pub connection_identity_hash: String,
     pub database: String,
-    pub started_at: DateTime<Utc>,
+    pub started_at: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<Timestamp>,
     pub tools_version: Option<String>,
     pub process_succeeded: bool,
     pub preflight_collections: Vec<String>,

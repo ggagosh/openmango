@@ -1,7 +1,7 @@
 //! Connection import/export types and logic.
 
 use anyhow::{Result, bail};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::helpers::{
@@ -85,7 +85,7 @@ impl TransportSecrets {
 pub struct ConnectionExportFile {
     pub version: u32,
     pub app: String,
-    pub exported_at: DateTime<Utc>,
+    pub exported_at: Timestamp,
     pub mode: ExportMode,
     pub connections: Vec<ExportedConnection>,
 }
@@ -161,7 +161,7 @@ pub fn build_export(
     Ok(ConnectionExportFile {
         version: CURRENT_VERSION,
         app: "openmango".to_string(),
-        exported_at: Utc::now(),
+        exported_at: Timestamp::now(),
         mode,
         connections: exported,
     })
@@ -329,7 +329,7 @@ mod tests {
                 environment: Some(ConnectionEnvironment::Staging),
                 confirm_production_writes: false,
                 uri: "mongodb+srv://user:pass@cluster0.abc.mongodb.net/mydb".into(),
-                last_connected: Some(Utc::now()),
+                last_connected: Some(Timestamp::now()),
                 read_only: true,
                 agent_shared: false,
                 agent_writable: false,
@@ -482,7 +482,7 @@ mod tests {
         let file = ConnectionExportFile {
             version: 1,
             app: "openmango".into(),
-            exported_at: Utc::now(),
+            exported_at: Timestamp::now(),
             mode: ExportMode::Redacted,
             connections: vec![
                 ExportedConnection {

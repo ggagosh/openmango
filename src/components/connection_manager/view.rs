@@ -6,7 +6,6 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{ConnectionManager, ManagerTab, TestStatus};
-use crate::components::busy_label;
 use crate::theme::{islands, spacing};
 
 impl Render for ConnectionManager {
@@ -204,7 +203,10 @@ impl ConnectionManager {
                 )
             })
             .child(
-                busy_label(Button::new("test-connection"), Size::Small, "Test", testing)
+                Button::new("test-connection")
+                    .with_size(Size::Small)
+                    .loading(testing)
+                    .label("Test")
                     .disabled(busy)
                     .on_click({
                         let view = view.clone();
@@ -224,23 +226,22 @@ impl ConnectionManager {
                 )
             })
             .child(
-                busy_label(
-                    Button::new("save-connect").primary(),
-                    Size::Small,
-                    if is_active {
+                Button::new("save-connect")
+                    .primary()
+                    .with_size(Size::Small)
+                    .loading(connecting)
+                    .label(if is_active {
                         if dirty { "Save & Reconnect" } else { "Reconnect" }
                     } else if self.creating_new || dirty {
                         "Save & Connect"
                     } else {
                         "Connect"
-                    },
-                    connecting,
-                )
-                .disabled(busy)
-                .on_click({
-                    let view = view.clone();
-                    move |_, window, cx| Self::request_save(view.clone(), true, window, cx)
-                }),
+                    })
+                    .disabled(busy)
+                    .on_click({
+                        let view = view.clone();
+                        move |_, window, cx| Self::request_save(view.clone(), true, window, cx)
+                    }),
             );
         // Hints and the test trace sit behind Details, with Copy for support.
         let failure = failure.map(|report| {

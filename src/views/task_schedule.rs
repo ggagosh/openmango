@@ -5,7 +5,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use chrono::{Local, NaiveTime, Weekday};
 use gpui_kit::component::button::{ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::calendar::{Calendar, CalendarState, Date, Matcher};
 use gpui_kit::component::checkbox::Checkbox;
@@ -16,6 +15,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use jiff::ZonedDateTime;
+use jiff::civil::{Time, Weekday};
 use uuid::Uuid;
 
 use crate::components::{Button, cancel_button, open_confirm_dialog};
@@ -25,19 +26,21 @@ use crate::state::app_state::ScheduleSettings;
 use crate::state::{AppState, StatusMessage, TransferMode};
 use crate::tasks::model::{Task, TaskSpec};
 use crate::tasks::safety::SafetyLimit;
-use crate::tasks::schedule::{MIN_EVERY_MINUTES, Schedule, names_its_own_time, stamped_path};
+use crate::tasks::schedule::{
+    MIN_EVERY_MINUTES, Schedule, names_its_own_time, stamped_path, weekday_names,
+};
 use crate::theme::spacing;
 
 /// How many files a scheduled export keeps when it keeps only its newest.
 const KEEP_FILES: u32 = 30;
 const DAYS: [Weekday; 7] = [
-    Weekday::Mon,
-    Weekday::Tue,
-    Weekday::Wed,
-    Weekday::Thu,
-    Weekday::Fri,
-    Weekday::Sat,
-    Weekday::Sun,
+    Weekday::Monday,
+    Weekday::Tuesday,
+    Weekday::Wednesday,
+    Weekday::Thursday,
+    Weekday::Friday,
+    Weekday::Saturday,
+    Weekday::Sunday,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,12 +67,16 @@ pub(crate) fn tabular() -> FontFeatures {
 
 /// The computer's time zone, e.g. "Asia/Tbilisi", or its offset when the name is unknown.
 pub(crate) fn zone_name() -> String {
-    iana_time_zone::get_timezone().unwrap_or_else(|_| Local::now().format("UTC%:z").to_string())
+    let zone = jiff::tz::TimeZone::system();
+    match zone.iana_name() {
+        Some(name) => name.to_string(),
+        None => ZonedDateTime::now().strftime("UTC%:z").to_string(),
+    }
 }
 
 /// "Fri, Sep 25, 02:00".
-pub(crate) fn run_time(at: chrono::DateTime<Local>) -> String {
-    at.format("%a, %b %-d, %H:%M").to_string()
+pub(crate) fn run_time(at: &ZonedDateTime) -> String {
+    at.strftime("%a, %b %-d, %H:%M").to_string()
 }
 
 pub struct ScheduleEditor {
@@ -108,7 +115,7 @@ impl ScheduleEditor {
     ) -> Self {
         let (mut repeat, mut hours, mut every) = (Repeat::Manual, true, 1);
         let (mut at, mut days, mut weekdays_only, mut day) =
-            (NaiveTime::from_hms_opt(2, 0, 0).unwrap_or_default(), vec![Weekday::Mon], false, 1);
+            (Time::new(2, 0, 0, 0).unwrap_or_default(), vec![Weekday::Monday], false, 1);
         match &task.schedule {
             Schedule::Manual => {}
             Schedule::Every { minutes } => {
@@ -130,7 +137,7 @@ impl ScheduleEditor {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder).default_value(value))
         };
         let every = input(every.to_string(), "1");
-        let time = input(at.format("%H:%M").to_string(), "02:00");
+        let time = input(at.strftime("%H:%M").to_string(), "02:00");
         let day = input(day.to_string(), "1");
         let percent = input(task.safety.percent.to_string(), "10");
         let jump = input(task.safety.jump.to_string(), "3");
@@ -181,8 +188,8 @@ impl ScheduleEditor {
         input.read(cx).value().trim().parse().ok()
     }
 
-    fn at(&self, cx: &App) -> Result<NaiveTime, String> {
-        NaiveTime::parse_from_str(self.time.read(cx).value().trim(), "%H:%M")
+    fn at(&self, cx: &App) -> Result<Time, String> {
+        Time::strptime("%H:%M", self.time.read(cx).value().trim())
             .map_err(|_| "Enter a time like 02:00, on a 24-hour clock.".into())
     }
 
@@ -269,7 +276,7 @@ impl ScheduleEditor {
         let apply = {
             let (state, id, name) = (self.state.clone(), self.task.id, self.task.name.clone());
             move |window: &mut Window, cx: &mut App| -> Result<(), String> {
-                let next = schedule.next_after(&Local::now());
+                let next = schedule.next_after(&jiff::ZonedDateTime::now());
                 let label = schedule.label();
                 let result = state.update(cx, |app, cx| {
                     let settings = ScheduleSettings {
@@ -286,7 +293,7 @@ impl ScheduleEditor {
                             Some(next) => format!(
                                 "“{name}” is scheduled: {}. Next run {}.",
                                 label.to_lowercase(),
-                                run_time(next)
+                                run_time(&next)
                             ),
                             None => format!("“{name}” runs only when you choose Run now."),
                         };
@@ -437,7 +444,7 @@ impl ScheduleEditor {
                                 .compact()
                                 .multiple(true)
                                 .children(DAYS.iter().map(|day| {
-                                    Self::choice(&day.to_string(), self.days.contains(day))
+                                    Self::choice(weekday_names::name(*day), self.days.contains(day))
                                 }))
                                 .on_click(cx.listener(|editor, selection: &Vec<usize>, _, cx| {
                                     editor.days =
@@ -480,11 +487,11 @@ impl ScheduleEditor {
     fn render_next(&self, schedule: &Schedule, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().muted_foreground;
         let mut times = Vec::new();
-        let mut after = Local::now();
+        let mut after = ZonedDateTime::now();
         while times.len() < 3
             && let Some(next) = schedule.next_after(&after)
         {
-            times.push(next);
+            times.push(next.clone());
             after = next;
         }
         let list = div().flex().flex_col().gap(spacing::xs()).children(
@@ -493,7 +500,7 @@ impl ScheduleEditor {
                     .text_sm()
                     .font_features(tabular())
                     .when(index > 0, |line| line.text_color(muted))
-                    .child(run_time(*at))
+                    .child(run_time(at))
             }),
         );
         // Every so many minutes runs every day, so a calendar would say nothing the times don't.
@@ -501,16 +508,16 @@ impl ScheduleEditor {
             // The days it doesn't run are dimmed, and the next run is selected. The date is set
             // again only when it changed, so paging to another month stays there.
             let runs = schedule.clone();
-            let next = Date::Single(times.first().map(|at| at.date_naive()));
+            let next = Date::Single(times.first().map(|at| at.date()));
             self.calendar.update(cx, |calendar, _| {
                 calendar.set_disabled_matcher_shared(Some(Rc::new(Matcher::from(
-                    move |date: &chrono::NaiveDate| !runs.runs_on(*date),
+                    move |date: &jiff::civil::Date| !runs.runs_on(*date),
                 ))));
                 if calendar.date() != next {
                     calendar.apply_date(next);
                 }
             });
-            Calendar::new(&self.calendar).first_day_of_week(Weekday::Mon).small()
+            Calendar::new(&self.calendar).first_day_of_week(Weekday::Monday).small()
         });
         div()
             .flex()
@@ -567,8 +574,8 @@ impl ScheduleEditor {
     fn render_export(&self, path: &str, schedule: &Schedule, cx: &mut Context<Self>) -> Div {
         let muted = cx.theme().muted_foreground;
         let example = schedule
-            .next_after(&Local::now())
-            .map(|next| stamped_path(path, next.naive_local()))
+            .next_after(&jiff::ZonedDateTime::now())
+            .map(|next| stamped_path(path, next.datetime()))
             .and_then(|path| {
                 std::path::Path::new(&path)
                     .file_name()
@@ -761,7 +768,6 @@ pub fn open_schedule_dialog(
 mod tests {
     use std::sync::Arc;
 
-    use chrono::{Datelike as _, NaiveTime};
     use gpui_kit::component::{Root, WindowExt as _};
     use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext, px, size};
 
@@ -871,10 +877,10 @@ mod tests {
                                 .disabled_matcher_ref()
                                 .is_some_and(|matcher| matcher.matched(&date))
                         };
-                        (next, dims(next.succ_opt().unwrap()), dims(next))
+                        (next, dims(next.tomorrow().unwrap()), dims(next))
                     });
-                assert_eq!(next_monday.weekday(), chrono::Weekday::Mon);
-                assert!(next_monday >= chrono::Local::now().date_naive());
+                assert_eq!(next_monday.weekday(), jiff::civil::Weekday::Monday);
+                assert!(next_monday >= jiff::ZonedDateTime::now().date());
                 assert!(dims_tuesday && !dims_monday);
             }
         }
@@ -885,7 +891,7 @@ mod tests {
         assert_eq!(
             saved.schedule,
             Schedule::Daily {
-                at: NaiveTime::from_hms_opt(7, 30, 0).unwrap(),
+                at: jiff::civil::Time::new(7, 30, 0, 0).unwrap(),
                 weekdays_only: false
             }
         );

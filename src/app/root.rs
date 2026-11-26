@@ -797,7 +797,7 @@ impl AppRoot {
                 while let Some(grant_id) = grant_usage_receiver.recv().await {
                     cx.update(|cx| {
                         state.update(cx, |state, cx| {
-                            let now = chrono::Utc::now();
+                            let now = jiff::Timestamp::now();
                             let Some(grant) = state
                                 .settings
                                 .mcp
@@ -809,7 +809,7 @@ impl AppRoot {
                             };
                             let stale = grant
                                 .last_used_at
-                                .is_none_or(|last_used| (now - last_used).num_seconds() >= 60);
+                                .is_none_or(|last_used| (now - last_used).as_secs() >= 60);
                             if stale {
                                 grant.last_used_at = Some(now);
                                 state.save_settings();

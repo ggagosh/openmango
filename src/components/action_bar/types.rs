@@ -1,4 +1,5 @@
 use gpui_kit::{Keystroke, SharedString};
+use uuid::Uuid;
 
 use crate::components::ConnectionIdentity;
 
@@ -74,6 +75,48 @@ impl ActionCategory {
             Self::Saved => 5,
             Self::DarkTheme => 6,
             Self::LightTheme => 7,
+        }
+    }
+}
+
+/// What Go to searches inside: a connection, then one of its databases. Each level shows as a tag
+/// in front of the query.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NavScope {
+    pub connection: Option<(Uuid, SharedString)>,
+    pub database: Option<SharedString>,
+}
+
+impl NavScope {
+    /// The scope a Go to row opens into: a connection's or a database's own id.
+    pub fn of(id: &str, connection_name: impl Fn(Uuid) -> Option<String>) -> Option<Self> {
+        let (uuid, database) = match id.strip_prefix("nav:conn:") {
+            Some(uuid) => (uuid, None),
+            None => {
+                let (uuid, database) = id.strip_prefix("nav:db:")?.split_once(':')?;
+                (uuid, Some(SharedString::from(database.to_string())))
+            }
+        };
+        let uuid = Uuid::parse_str(uuid).ok()?;
+        let name = connection_name(uuid)?;
+        Some(Self { connection: Some((uuid, name.into())), database })
+    }
+
+    /// The id prefix of the rows directly inside this scope: connections, then databases, then
+    /// collections.
+    pub fn child_prefix(&self) -> &'static str {
+        match (&self.connection, &self.database) {
+            (None, _) => "nav:conn:",
+            (Some(_), None) => "nav:db:",
+            (Some(_), Some(_)) => "nav:col:",
+        }
+    }
+
+    pub fn placeholder(&self) -> Option<String> {
+        match (&self.connection, &self.database) {
+            (_, Some(database)) => Some(format!("Search collections in {database}…")),
+            (Some((_, name)), None) => Some(format!("Search databases and collections in {name}…")),
+            (None, None) => None,
         }
     }
 }

@@ -8,14 +8,14 @@ pub use raw::RawOutputState;
 
 use super::ForgeView;
 use super::types::{ForgeRunOutput, MAX_OUTPUT_LINES, MAX_OUTPUT_RUNS, SYSTEM_RUN_ID};
-use chrono::Utc;
+use jiff::Timestamp;
 
 impl ForgeView {
     pub fn begin_run(&mut self, run_id: u64, code: &str) {
         let preview = Self::code_preview(code);
         self.state.output.output_runs.push(ForgeRunOutput {
             id: run_id,
-            started_at: Utc::now(),
+            started_at: Timestamp::now(),
             code_preview: preview,
             raw_lines: Vec::new(),
             evaluation_lines: Vec::new(),
@@ -48,7 +48,7 @@ impl ForgeView {
         if !self.state.output.output_runs.iter().any(|run| run.id == SYSTEM_RUN_ID) {
             self.state.output.output_runs.push(ForgeRunOutput {
                 id: SYSTEM_RUN_ID,
-                started_at: Utc::now(),
+                started_at: Timestamp::now(),
                 code_preview: "Shell output".to_string(),
                 raw_lines: Vec::new(),
                 evaluation_lines: Vec::new(),
@@ -74,7 +74,7 @@ impl ForgeView {
         } else {
             self.state.output.output_runs.push(ForgeRunOutput {
                 id: run_id,
-                started_at: Utc::now(),
+                started_at: Timestamp::now(),
                 code_preview: "Shell output".to_string(),
                 raw_lines: normalized,
                 evaluation_lines: Vec::new(),
@@ -98,7 +98,7 @@ impl ForgeView {
         } else {
             self.state.output.output_runs.push(ForgeRunOutput {
                 id: run_id,
-                started_at: Utc::now(),
+                started_at: Timestamp::now(),
                 code_preview: "Shell output".to_string(),
                 raw_lines: Vec::new(),
                 evaluation_lines: lines,
@@ -120,7 +120,7 @@ impl ForgeView {
 
         self.state.output.output_runs.push(ForgeRunOutput {
             id: run_id,
-            started_at: Utc::now(),
+            started_at: Timestamp::now(),
             code_preview: "Shell output".to_string(),
             raw_lines: Vec::new(),
             evaluation_lines: Vec::new(),

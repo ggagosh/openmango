@@ -321,7 +321,7 @@ mod tests {
     fn legacy_query_library_defaults_saved_metadata() {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let manager = ConfigManager::with_config_dir(temp_dir.path().to_path_buf());
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let fixture = serde_json::json!({
             "history": [],
             "saved": [{

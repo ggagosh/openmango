@@ -148,7 +148,7 @@ pub fn render_relations_chip(
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     use super::{Chip, chip};
     use crate::state::relations::{Evidence, FieldRef, Origin, Relation, RelationGraph};
@@ -177,7 +177,7 @@ mod tests {
         followed(&mut graph, "orders", "userId", "users");
         followed(&mut graph, "reviews", "orderId", "orders");
         followed(&mut graph, "users", "companyId", "companies");
-        graph.mark_inferred("shop", Utc::now());
+        graph.mark_inferred("shop", Timestamp::now());
 
         assert_eq!(
             chip(&graph, None, 0, "shop", "orders"),
@@ -212,7 +212,7 @@ mod tests {
             FieldRef::new("shop", "orders", "userId"),
             FieldRef::id_of("shop", "users"),
             1.0,
-            Evidence { probed: 20, hits: 20, sampled: 400, sampled_at: Utc::now() },
+            Evidence { probed: 20, hits: 20, sampled: 400, sampled_at: Timestamp::now() },
         ));
 
         assert_eq!(graph.inferred_at("shop"), None);

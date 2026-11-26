@@ -4,7 +4,7 @@ use std::io::{Read as _, Write as _};
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use mongodb::bson::{Bson, Document};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -23,7 +23,7 @@ const MAX_CONTENT_BYTES: usize = 1024 * 1024;
 pub struct QueryLibraryExportFile {
     pub version: u32,
     pub app: String,
-    pub exported_at: DateTime<Utc>,
+    pub exported_at: Timestamp,
     pub queries: Vec<PortableSavedQuery>,
 }
 
@@ -167,7 +167,7 @@ pub fn build_export(saved: &[SavedQuery]) -> Result<QueryLibraryExportFile> {
     let file = QueryLibraryExportFile {
         version: CURRENT_VERSION,
         app: "openmango".to_string(),
-        exported_at: Utc::now(),
+        exported_at: Timestamp::now(),
         queries,
     };
     encoded_export(&file)?;
@@ -396,7 +396,7 @@ mod tests {
         let empty = QueryLibraryExportFile {
             version: CURRENT_VERSION,
             app: "openmango".into(),
-            exported_at: Utc::now(),
+            exported_at: Timestamp::now(),
             queries: Vec::new(),
         };
         assert!(parse_import(&serde_json::to_string(&empty).unwrap()).is_err());

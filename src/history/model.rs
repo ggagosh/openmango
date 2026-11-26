@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use mongodb::{Client, bson::Document};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -133,8 +133,8 @@ pub struct BatchSummary {
     pub family: OperationFamily,
     pub grouping: GroupingKind,
     pub trace_id: Option<Uuid>,
-    pub first_wall_time: DateTime<Utc>,
-    pub last_wall_time: DateTime<Utc>,
+    pub first_wall_time: Timestamp,
+    pub last_wall_time: Timestamp,
     pub item_count: u64,
     pub revertible_count: u64,
     pub conflict_count: u64,
@@ -181,7 +181,7 @@ pub struct HistoryGap {
     pub collection: Option<String>,
     pub kind: String,
     pub reason: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub resolved: bool,
 }
 
@@ -282,8 +282,8 @@ pub struct TraceDescriptor {
     pub database: String,
     pub collection: String,
     pub family: OperationFamily,
-    pub started_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
+    pub started_at: Timestamp,
+    pub completed_at: Option<Timestamp>,
     pub affected_count: Option<u64>,
 }
 
@@ -298,7 +298,7 @@ pub(crate) struct RecordedEvent {
     pub after: Option<Document>,
     pub resume_token: Vec<u8>,
     pub cluster_time: Option<String>,
-    pub wall_time: DateTime<Utc>,
+    pub wall_time: Timestamp,
     pub transaction_key: Option<Vec<u8>>,
     pub trace_id: Option<Uuid>,
 }

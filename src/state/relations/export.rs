@@ -339,7 +339,7 @@ mod tests {
             FieldRef::new("shop", "orders", "couponId"),
             FieldRef::id_of("shop", "coupons"),
             0.4,
-            Evidence { probed: 10, hits: 4, sampled: 200, sampled_at: chrono::Utc::now() },
+            Evidence { probed: 10, hits: 4, sampled: 200, sampled_at: jiff::Timestamp::now() },
         ));
 
         let text = compact(&graph, "shop", None);

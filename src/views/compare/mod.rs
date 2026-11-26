@@ -136,7 +136,7 @@ pub(super) fn open_side(
 }
 
 pub(super) fn relative_time(at: mongodb::bson::DateTime) -> String {
-    let seconds = (chrono::Utc::now().timestamp_millis() - at.timestamp_millis()).max(0) / 1_000;
+    let seconds = (jiff::Timestamp::now().as_millisecond() - at.timestamp_millis()).max(0) / 1_000;
     if seconds < 60 {
         "just now".into()
     } else if seconds < 3_600 {

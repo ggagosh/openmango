@@ -1,15 +1,13 @@
 use gpui_kit::component::button::ButtonVariants as _;
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use jiff::Timestamp;
 
-use crate::components::{
-    Button, WriteConfirmation, WriteRequest, busy_label, request_connection_write,
-};
+use crate::components::{Button, WriteConfirmation, WriteRequest, request_connection_write};
 use crate::history::{BatchStatus, BatchSummary, HistoryGap};
 use crate::state::{AppCommands, AppState, SessionKey};
 use crate::theme::{fonts, spacing};
@@ -106,19 +104,18 @@ pub(crate) fn render_history_view(
                     let state = state.clone();
                     let session_key = session_key.clone();
                     div().flex().justify_center().p(spacing::lg()).child(
-                        busy_label(
-                            Button::new("load-more-collection-history").ghost(),
-                            Size::XSmall,
-                            "Load more",
-                            loading,
-                        )
-                        .on_click(move |_, _, cx| {
-                            AppCommands::load_more_collection_history(
-                                state.clone(),
-                                session_key.clone(),
-                                cx,
-                            );
-                        }),
+                        Button::new("load-more-collection-history")
+                            .ghost()
+                            .with_size(Size::XSmall)
+                            .loading(loading)
+                            .label("Load more")
+                            .on_click(move |_, _, cx| {
+                                AppCommands::load_more_collection_history(
+                                    state.clone(),
+                                    session_key.clone(),
+                                    cx,
+                                );
+                            }),
                     )
                 })),
         )
@@ -383,12 +380,7 @@ fn batch_row(
                 .justify_end()
                 .gap(spacing::xs())
                 .child(
-                    busy_label(
-                        Button::new(("history-batch-details", batch_id.as_u128() as u64)).ghost(),
-                        Size::XSmall,
-                        if details_loaded { "Hide" } else { "Details" },
-                        detail_loading,
-                    )
+                    Button::new(("history-batch-details", batch_id.as_u128() as u64)).ghost().with_size(Size::XSmall).loading(detail_loading).label(if details_loaded { "Hide" } else { "Details" })
                         .on_click({
                             let state = state.clone();
                             let session_key = session_key.clone();
@@ -610,8 +602,8 @@ fn empty_state(icon: IconName, title: &str, description: &str, cx: &App) -> Div 
     )
 }
 
-fn relative_time(time: DateTime<Utc>) -> String {
-    let seconds = (Utc::now() - time).num_seconds().max(0);
+fn relative_time(time: Timestamp) -> String {
+    let seconds = (Timestamp::now() - time).as_secs().max(0);
     if seconds < 60 {
         "just now".into()
     } else if seconds < 3_600 {
@@ -619,15 +611,15 @@ fn relative_time(time: DateTime<Utc>) -> String {
     } else if seconds < 86_400 {
         format!("{}h ago", seconds / 3_600)
     } else {
-        time.format("%b %-d, %H:%M").to_string()
+        time.strftime("%b %-d, %H:%M").to_string()
     }
 }
 
-fn format_time_range(first: DateTime<Utc>, last: DateTime<Utc>) -> String {
+fn format_time_range(first: Timestamp, last: Timestamp) -> String {
     if first == last {
-        first.format("%H:%M:%S").to_string()
+        first.strftime("%H:%M:%S").to_string()
     } else {
-        format!("{}–{}", first.format("%H:%M:%S"), last.format("%H:%M:%S"))
+        format!("{}–{}", first.strftime("%H:%M:%S"), last.strftime("%H:%M:%S"))
     }
 }
 

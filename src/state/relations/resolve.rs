@@ -258,7 +258,7 @@ mod tests {
                 probed: 10,
                 hits: 10,
                 sampled: 1000,
-                sampled_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                sampled_at: jiff::Timestamp::from_second(1_700_000_000).unwrap(),
             },
         ));
 

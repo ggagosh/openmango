@@ -479,7 +479,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    jiff::Timestamp::now().as_millisecond()
 }
 
 /// What is kept of a message: the words said, never a tool call or the rows it returned.
@@ -699,7 +699,7 @@ mod tests {
                 "why is this slow?",
             ),
             assistant_message: None,
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
         });
         store.save_timeline("failed", &[asked]).expect("write");
         let failed = store.recent(10).expect("recent");

@@ -580,23 +580,44 @@ pub fn parse_edited_value(original: &Bson, input: &str) -> Result<Bson, String> 
 /// without an offset (`2024-01-31T09:30`). Dates without an offset are read as UTC.
 pub fn parse_date_input(input: &str) -> Option<DateTime> {
     let input = input.trim();
-    if let Ok(datetime) = chrono::DateTime::parse_from_rfc3339(input) {
-        return Some(DateTime::from_millis(datetime.timestamp_millis()));
+    let utc = |at: jiff::civil::DateTime| {
+        let at = at.to_zoned_datetime(jiff::tz::TimeZone::UTC).ok()?;
+        Some(DateTime::from_millis(at.timestamp().as_millisecond()))
+    };
+    if let Ok(at) = input.parse::<jiff::Timestamp>() {
+        return Some(DateTime::from_millis(at.as_millisecond()));
     }
-    if let Ok(date) = chrono::NaiveDate::parse_from_str(input, "%Y-%m-%d") {
-        return Some(DateTime::from_millis(
-            date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis(),
-        ));
+    if let Ok(date) = jiff::civil::Date::strptime("%Y-%m-%d", input) {
+        return utc(date.to_datetime(jiff::civil::Time::midnight()));
     }
     ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M"]
         .iter()
-        .find_map(|format| chrono::NaiveDateTime::parse_from_str(input, format).ok())
-        .map(|datetime| DateTime::from_millis(datetime.and_utc().timestamp_millis()))
+        .find_map(|format| jiff::civil::DateTime::strptime(format, input).ok())
+        .and_then(utc)
 }
 
 #[cfg(test)]
 mod field_edit_tests {
     use super::*;
+
+    #[test]
+    fn typed_dates_read_as_the_instant_they_name() {
+        let at = |text: &str| parse_date_input(text).map(|date| date.timestamp_millis());
+        let utc_0930 =
+            DateTime::parse_rfc3339_str("2024-01-31T09:30:00Z").unwrap().timestamp_millis();
+        assert_eq!(at("2024-01-31T09:30:00Z"), Some(utc_0930));
+        assert_eq!(at(" 2024-01-31T13:30:00+04:00 "), Some(utc_0930));
+        assert_eq!(at("2024-01-31T09:30:00.250Z"), Some(utc_0930 + 250));
+        // No offset: UTC.
+        assert_eq!(at("2024-01-31T09:30"), Some(utc_0930));
+        assert_eq!(at("2024-01-31 09:30"), Some(utc_0930));
+        assert_eq!(at("2024-01-31T09:30:00"), Some(utc_0930));
+        assert_eq!(at("2024-01-31 09:30:00.250"), Some(utc_0930 + 250));
+        assert_eq!(at("2024-01-31"), Some(utc_0930 - (9 * 60 + 30) * 60_000));
+        assert_eq!(at("31/01/2024"), None);
+        assert_eq!(at("2024-02-30"), None);
+    }
+
     #[test]
     fn field_input_preserves_whitespace_and_bson_type() {
         assert!(!crate::bson::is_editable_value(

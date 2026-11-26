@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
 use gpui_kit::{App, AppContext as _, Context, Entity, Subscription};
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::connection::CancellationToken;
@@ -36,7 +36,7 @@ pub struct TasksState {
     pub store_note: Option<String>,
     /// Scheduled runs that are due, waiting for the run before them to end: task, due time, and
     /// whether it is a catch-up. Runs go one at a time.
-    pub queue: Vec<(Uuid, DateTime<Utc>, bool)>,
+    pub queue: Vec<(Uuid, Timestamp, bool)>,
     /// The task the Tasks tab should select next, e.g. from a notification's Open.
     pub focus: Option<Uuid>,
     /// Makes this process the one that starts scheduled runs. Until it is held, another
@@ -214,7 +214,7 @@ impl AppState {
         if let Some(error) = &self.tasks.load_error {
             return Err(error.clone());
         }
-        task.updated_at = chrono::Utc::now();
+        task.updated_at = jiff::Timestamp::now();
         match self.tasks.tasks.iter_mut().find(|existing| existing.id == task.id) {
             Some(existing) => {
                 // Scheduled writes were approved for what the task wrote before.
@@ -264,7 +264,7 @@ impl AppState {
         task.run_when_closed = scheduled && settings.run_when_closed;
         task.paused = false;
         task.paused_by_sign_in = false;
-        task.schedule_from = Some(Utc::now());
+        task.schedule_from = Some(Timestamp::now());
         self.upsert_task(task)?;
         self.sync_background_runner();
         Ok(())
@@ -336,7 +336,7 @@ impl AppState {
         task.paused = paused;
         if !paused {
             task.paused_by_sign_in = false;
-            task.schedule_from = Some(Utc::now());
+            task.schedule_from = Some(Timestamp::now());
         }
         self.upsert_task(task)
     }
@@ -565,7 +565,7 @@ impl AppState {
     }
 
     /// Notes that the scheduler dealt with the task's run due at `due`, so it isn't run again.
-    pub(crate) fn mark_task_due(&mut self, id: Uuid, due: DateTime<Utc>) {
+    pub(crate) fn mark_task_due(&mut self, id: Uuid, due: Timestamp) {
         if let Some(task) = self.tasks.tasks.iter_mut().find(|task| task.id == id) {
             task.schedule_from = Some(due);
         }

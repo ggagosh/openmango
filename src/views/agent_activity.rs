@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::dialog::Dialog;
@@ -7,6 +6,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use jiff::Timestamp;
 
 use crate::actions::model::{
     ActionRequest, ActionStatus, OperationRecord, OperationStatus, ProposedAction,
@@ -346,7 +346,7 @@ fn action_card(
                                                 .as_deref()
                                                 .unwrap_or("Agent"),
                                             relative_time(action.created_at),
-                                            action.expires_at.format("%H:%M"),
+                                            action.expires_at.strftime("%H:%M"),
                                             action.hash_suffix()
                                         )),
                                 ),
@@ -885,8 +885,8 @@ fn activity_summary(running: usize, recovery_required: usize) -> String {
     }
 }
 
-fn relative_time(time: DateTime<Utc>) -> String {
-    let seconds = (Utc::now() - time).num_seconds().max(0);
+fn relative_time(time: Timestamp) -> String {
+    let seconds = (Timestamp::now() - time).as_secs().max(0);
     if seconds < 60 {
         "just now".into()
     } else if seconds < 3_600 {
@@ -896,7 +896,7 @@ fn relative_time(time: DateTime<Utc>) -> String {
     } else if seconds < 604_800 {
         format!("{}d ago", seconds / 86_400)
     } else {
-        time.format("%b %-d, %H:%M").to_string()
+        time.strftime("%b %-d, %H:%M").to_string()
     }
 }
 

@@ -123,7 +123,7 @@ impl ActionStore {
                 } else {
                     super::model::OperationStatus::Interrupted
                 };
-                operation.updated_at = chrono::Utc::now();
+                operation.updated_at = jiff::Timestamp::now();
                 self.save_operation(&operation)?;
                 changed.push(operation);
             }
@@ -230,7 +230,7 @@ fn set_owner_only_file(_path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     use super::*;
     use crate::actions::model::*;
@@ -297,8 +297,8 @@ mod tests {
                 },
             },
             content_hash: "hash".into(),
-            created_at: Utc::now(),
-            expires_at: Utc::now() + chrono::Duration::hours(1),
+            created_at: Timestamp::now(),
+            expires_at: Timestamp::now() + jiff::SignedDuration::from_hours(1),
             status: ActionStatus::PendingApproval,
             decision: None,
             operation_id: None,

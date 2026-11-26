@@ -580,11 +580,7 @@ impl AppState {
     /// Records a successful connect. Only the time changes: saving through `update_connection`
     /// would give the connection a new keychain entry, and with it a new identity, which reads as
     /// changed settings to task approvals and agent grants.
-    pub fn set_connection_last_connected(
-        &mut self,
-        connection_id: Uuid,
-        at: chrono::DateTime<chrono::Utc>,
-    ) {
+    pub fn set_connection_last_connected(&mut self, connection_id: Uuid, at: jiff::Timestamp) {
         let Some(connection) = self.connections.iter_mut().find(|item| item.id == connection_id)
         else {
             return;

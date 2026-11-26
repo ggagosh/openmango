@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result};
-use chrono::{Duration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use rusqlite::{Connection, params};
 use uuid::Uuid;
 
@@ -89,11 +89,12 @@ impl RunStore {
             params![
                 run.id.to_string(),
                 run.task_id.to_string(),
-                run.started_at.to_rfc3339(),
+                run.started_at.to_string(),
                 payload
             ],
         )?;
-        let cutoff = (Utc::now() - Duration::days(RUN_MAX_AGE_DAYS)).to_rfc3339();
+        let cutoff =
+            (Timestamp::now() - SignedDuration::from_hours(24 * RUN_MAX_AGE_DAYS)).to_string();
         connection.execute(
             "DELETE FROM runs WHERE task_id = ?1 AND (started_at < ?2 OR id NOT IN (
                  SELECT id FROM runs WHERE task_id = ?1 ORDER BY started_at DESC LIMIT ?3))",
@@ -140,7 +141,7 @@ impl RunStore {
         };
         for mut run in running.iter().cloned() {
             run.status = RunStatus::Interrupted;
-            run.finished_at.get_or_insert_with(Utc::now);
+            run.finished_at.get_or_insert_with(Timestamp::now);
             self.save(&run)?;
         }
         Ok(running.len())
@@ -154,7 +155,7 @@ mod tests {
 
     fn run_at(task_id: Uuid, days_ago: i64) -> Run {
         let mut run = Run::start(task_id, RunTrigger::Manual);
-        run.started_at = Utc::now() - Duration::days(days_ago);
+        run.started_at = Timestamp::now() - SignedDuration::from_hours(24 * days_ago);
         run.finish(false);
         run
     }
@@ -172,9 +173,8 @@ mod tests {
         let runs = store.runs(task).unwrap();
         assert_eq!(runs.len(), RUNS_PER_TASK);
         assert!(runs.windows(2).all(|pair| pair[0].started_at >= pair[1].started_at));
-        assert!(
-            runs.iter().all(|run| run.started_at > Utc::now() - Duration::days(RUN_MAX_AGE_DAYS))
-        );
+        assert!(runs.iter().all(|run| run.started_at
+            > Timestamp::now() - SignedDuration::from_hours(24 * RUN_MAX_AGE_DAYS)));
         assert_eq!(store.runs(other).unwrap().len(), 1, "other tasks keep their runs");
     }
 

@@ -74,7 +74,7 @@ fn prompt(context: &QueryContext) -> String {
         "{RULES}\n\nCollection: {}.{}\n\nFields:\n{fields}\n\nToday is {}.",
         context.database,
         context.collection,
-        chrono::Local::now().format("%Y-%m-%d"),
+        jiff::ZonedDateTime::now().strftime("%Y-%m-%d"),
     )
 }
 

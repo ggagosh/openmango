@@ -4,8 +4,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use gpui_kit::{AppContext as _, Entity};
+use jiff::Timestamp;
 
 use crate::connection::ConnectionManager;
 use crate::helpers::keystore::KeyStore;
@@ -16,12 +16,12 @@ use crate::tasks::store::RunStore;
 
 /// Whether the background runner should start the task at `now`: it may run while OpenMango is
 /// closed, and a run is due or a missed one has to be recorded as skipped.
-pub fn due_while_closed(task: &Task, now: DateTime<Utc>) -> bool {
+pub fn due_while_closed(task: &Task, now: Timestamp) -> bool {
     if !task.run_when_closed || task.paused || task.schedule.is_manual() {
         return false;
     }
     let from = task.schedule_from.unwrap_or(task.updated_at);
-    !matches!(schedule::due(&task.schedule, from, now, &chrono::Local), Due::Wait(_))
+    !matches!(schedule::due(&task.schedule, from, now, &jiff::tz::TimeZone::system()), Due::Wait(_))
 }
 
 /// Runs the due tasks without a window, then returns. Most starts find nothing due, or the app
@@ -38,7 +38,7 @@ pub fn run_due_tasks() {
         Ok(tasks) => tasks,
         Err(error) => return log::error!("Tasks couldn't be read: {error:#}"),
     };
-    let now = Utc::now();
+    let now = Timestamp::now();
     let due: Vec<&Task> = tasks.iter().filter(|task| due_while_closed(task, now)).collect();
     if due.is_empty() {
         return log::info!("Nothing set to run while OpenMango is closed is due");
@@ -80,7 +80,7 @@ pub fn run_due_tasks() {
                 Ok(store) => {
                     cx.update(|cx| {
                         state.update(cx, |app, _| app.attach_task_runs(store, None));
-                        AppCommands::check_schedules(&state, Utc::now(), cx);
+                        AppCommands::check_schedules(&state, Timestamp::now(), cx);
                     });
                     // Runs go one at a time; the queue empties as each one ends. Notices go out
                     // as runs start and end. No Open task button: this process has exited by the

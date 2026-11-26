@@ -461,7 +461,7 @@ impl Render for CollectionView {
                         let s = parse_time_part(&second_for_calendar.read(cx).value(), 59);
                         let formatted = format!(
                             "{}T{:02}:{:02}:{:02}.000Z",
-                            naive_date.format("%Y-%m-%d"),
+                            naive_date.strftime("%Y-%m-%d"),
                             h,
                             m,
                             s,
